@@ -1,12 +1,12 @@
 import { GenericSolverDebugger } from "@tscircuit/solver-utils/react"
 import { ImplicitCopperPourPipelineSolver } from "lib"
-import { simplePowerBoard } from "tests/fixtures/simple-power-board"
+import { nrf52810Board } from "tests/fixtures/nrf52810-board"
 
 export default (
   <GenericSolverDebugger
     createSolver={() =>
       new ImplicitCopperPourPipelineSolver({
-        circuitJson: simplePowerBoard,
+        circuitJson: nrf52810Board,
         gridPitch: 0.25,
         minRegionArea: 2,
       })

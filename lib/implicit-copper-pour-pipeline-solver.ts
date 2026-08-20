@@ -17,6 +17,11 @@ import type {
   LabeledProblem,
   PreparedProblem,
 } from "./types"
+import {
+  mergeSolverGraphics,
+  visualizePowerPours,
+  visualizePreparedProblem,
+} from "./visualize"
 
 class PrepareCircuitJsonSolver extends BaseSolver {
   private output?: PreparedProblem
@@ -101,6 +106,8 @@ class TracePowerPolygonsSolver extends BaseSolver {
 }
 
 export class ImplicitCopperPourPipelineSolver extends BasePipelineSolver<ImplicitCopperPourSolverInput> {
+  private initialPreparedProblem?: PreparedProblem
+
   pipelineDef: PipelineStep<any>[] = [
     definePipelineStep(
       "prepareCircuitJson",
@@ -136,6 +143,22 @@ export class ImplicitCopperPourPipelineSolver extends BasePipelineSolver<Implici
       this.getStageOutput<ImplicitCopperPourSolverOutput>(
         "tracePowerPolygons",
       ) ?? []
+    )
+  }
+
+  override visualize(): GraphicsObject {
+    const preparedProblem =
+      this.getStageOutput<PreparedProblem>("prepareCircuitJson") ??
+      (this.initialPreparedProblem ??= prepareCircuitJson(this.inputProblem))
+    const sourceGraphics = visualizePreparedProblem(preparedProblem)
+    const pours =
+      this.getStageOutput<ImplicitCopperPourSolverOutput>(
+        "tracePowerPolygons",
+      ) ?? []
+
+    return mergeSolverGraphics(
+      sourceGraphics,
+      visualizePowerPours(preparedProblem, pours),
     )
   }
 }
