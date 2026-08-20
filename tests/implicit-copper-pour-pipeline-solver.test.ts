@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { AnyCircuitElement } from "circuit-json"
 import { ImplicitCopperPourPipelineSolver } from "../lib"
-import { powerTraceExpansionBoard } from "./fixtures/power-trace-expansion-board"
+import { nrf52810Board } from "./fixtures/nrf52810-board"
 import { simplePowerBoard } from "./fixtures/simple-power-board"
 
 describe("ImplicitCopperPourPipelineSolver", () => {
@@ -45,9 +45,9 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     expect(solver.getOutput()[0]?.layer).toBe("top")
   })
 
-  test("solves the Power Trace Expansion artifact fixture", () => {
+  test("solves the nRF52810 Circuit JSON fixture", () => {
     const solver = new ImplicitCopperPourPipelineSolver({
-      circuitJson: powerTraceExpansionBoard,
+      circuitJson: nrf52810Board,
       gridPitch: 0.5,
       minRegionArea: 2,
     })
@@ -58,11 +58,11 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     expect(output.length).toBeGreaterThan(0)
     expect(
       output.every((pour) =>
-        ["source_net_3", "source_net_15"].includes(pour.source_net_id ?? ""),
+        ["source_net_0", "source_net_1"].includes(pour.source_net_id ?? ""),
       ),
     ).toBe(true)
     expect(new Set(output.map((pour) => pour.source_net_id))).toEqual(
-      new Set(["source_net_3", "source_net_15"]),
+      new Set(["source_net_0", "source_net_1"]),
     )
   })
 

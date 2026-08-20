@@ -19,8 +19,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@tscircuit/solver-utils": "^0.0.21",
-    "circuit-json-to-connectivity-map": "^0.0.29"
+    "@tscircuit/solver-utils": "^0.0.21"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.4",
