@@ -1,0 +1,39 @@
+{
+  "name": "@tscircuit/implicit-copper-pour-solver",
+  "version": "0.0.1",
+  "description": "Generate implicit power-net copper pour polygons from Circuit JSON",
+  "type": "module",
+  "module": "lib/index.ts",
+  "files": ["lib"],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "format": "biome format . --write",
+    "format:check": "biome format .",
+    "start": "cosmos",
+    "build:site": "cosmos-export"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tscircuit/implicit-copper-pour-solver.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@tscircuit/solver-utils": "^0.0.21",
+    "circuit-json-to-connectivity-map": "^0.0.29"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.2.4",
+    "@types/bun": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "circuit-json": "^0.0.472",
+    "graphics-debug": "^0.0.100",
+    "react": "^19.1.1",
+    "react-cosmos": "^7.4.0",
+    "react-cosmos-plugin-vite": "^7.4.0",
+    "react-dom": "^19.1.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5"
+  }
+}
