@@ -12,6 +12,7 @@ import type {
 import type {
   CopperPrimitive,
   ImplicitCopperPourSolverInput,
+  PreparedNet,
   PreparedProblem,
 } from "./types"
 
@@ -227,7 +228,7 @@ export const prepareCircuitJson = (
   const sourceNets = input.circuitJson.filter(
     (element): element is SourceNet => element.type === "source_net",
   )
-  const nets = sourceNets.map((sourceNet) => ({
+  const nets: PreparedNet[] = sourceNets.map((sourceNet) => ({
     sourceNet,
     isPower: Boolean(
       sourceNet.is_power ||
@@ -247,35 +248,104 @@ export const prepareCircuitJson = (
     }
   }
 
-  const getConnectivityKeyNetIndex = (
+  const implicitNetIndexByReference = new Map<string, number>()
+  const getOrCreateImplicitNetIndex = (
+    reference: string,
+    displayName = reference,
+  ): number => {
+    const existingIndex = implicitNetIndexByReference.get(reference)
+    if (existingIndex !== undefined) return existingIndex
+
+    const baseId = `source_net_implicit_${reference.replace(/[^a-zA-Z0-9_]+/g, "_")}`
+    let sourceNetId = baseId
+    let suffix = 1
+    while (netIndexBySourceNetId.has(sourceNetId)) {
+      sourceNetId = `${baseId}_${suffix++}`
+    }
+    const sourceNet = {
+      type: "source_net",
+      source_net_id: sourceNetId,
+      name: displayName,
+      member_source_group_ids: [],
+      is_ground: false,
+      is_power: false,
+      is_positive_voltage_source: false,
+    } as SourceNet
+    const netIndex = nets.length
+    nets.push({ sourceNet, isPower: false })
+    netIndexBySourceNetId.set(sourceNetId, netIndex)
+    implicitNetIndexByReference.set(reference, netIndex)
+    return netIndex
+  }
+
+  const getOrCreateConnectivityKeyNetIndex = (
     element: AnyCircuitElement,
   ): number | undefined => {
     const connectivityKey = (
       element as { subcircuit_connectivity_map_key?: string }
     ).subcircuit_connectivity_map_key
-    return connectivityKey
-      ? netIndexByConnectivityKey.get(connectivityKey)
-      : undefined
+    if (!connectivityKey) return undefined
+    const existingIndex = netIndexByConnectivityKey.get(connectivityKey)
+    if (existingIndex !== undefined) return existingIndex
+    const netIndex = getOrCreateImplicitNetIndex(
+      `connectivity:${connectivityKey}`,
+      connectivityKey,
+    )
+    netIndexByConnectivityKey.set(connectivityKey, netIndex)
+    return netIndex
   }
 
   const sourceTraceNetIndex = new Map<string, number>()
   const sourcePortNetIndex = new Map<string, number>()
   for (const element of input.circuitJson) {
-    if (element.type === "source_port") {
-      const netIndex = getConnectivityKeyNetIndex(element)
-      if (netIndex !== undefined) {
-        sourcePortNetIndex.set(element.source_port_id, netIndex)
-      }
+    if (element.type !== "source_port") continue
+    const netIndex = getOrCreateConnectivityKeyNetIndex(element)
+    if (netIndex !== undefined) {
+      sourcePortNetIndex.set(element.source_port_id, netIndex)
     }
+  }
+
+  for (const element of input.circuitJson) {
     if (element.type !== "source_trace") continue
     const connectedNetIndex = (element.connected_source_net_ids as string[])
-      .map((sourceNetId: string) => netIndexBySourceNetId.get(sourceNetId))
+      .map(
+        (sourceNetId: string) =>
+          netIndexBySourceNetId.get(sourceNetId) ??
+          getOrCreateImplicitNetIndex(
+            `source-net-id:${sourceNetId}`,
+            sourceNetId,
+          ),
+      )
       .find((netIndex: number | undefined) => netIndex !== undefined)
-    const netIndex = connectedNetIndex ?? getConnectivityKeyNetIndex(element)
-    if (netIndex === undefined) continue
+    const connectedPortNetIndex = element.connected_source_port_ids
+      .map((sourcePortId: string) => sourcePortNetIndex.get(sourcePortId))
+      .find((netIndex: number | undefined) => netIndex !== undefined)
+    const netIndex =
+      connectedNetIndex ??
+      getOrCreateConnectivityKeyNetIndex(element) ??
+      connectedPortNetIndex ??
+      getOrCreateImplicitNetIndex(
+        `source-trace:${element.source_trace_id}`,
+        element.display_name ?? element.source_trace_id,
+      )
     sourceTraceNetIndex.set(element.source_trace_id, netIndex)
     for (const sourcePortId of element.connected_source_port_ids) {
       sourcePortNetIndex.set(sourcePortId, netIndex)
+    }
+  }
+
+  for (const element of input.circuitJson) {
+    if (
+      element.type === "source_port" &&
+      !sourcePortNetIndex.has(element.source_port_id)
+    ) {
+      sourcePortNetIndex.set(
+        element.source_port_id,
+        getOrCreateImplicitNetIndex(
+          `source-port:${element.source_port_id}`,
+          element.name ?? element.source_port_id,
+        ),
+      )
     }
   }
 
@@ -284,10 +354,12 @@ export const prepareCircuitJson = (
     if (element.type !== "pcb_port") continue
     const netIndex =
       sourcePortNetIndex.get(element.source_port_id) ??
-      getConnectivityKeyNetIndex(element)
-    if (netIndex !== undefined) {
-      pcbPortNetIndex.set(element.pcb_port_id, netIndex)
-    }
+      getOrCreateConnectivityKeyNetIndex(element) ??
+      getOrCreateImplicitNetIndex(
+        `source-port:${element.source_port_id}`,
+        element.source_port_id,
+      )
+    pcbPortNetIndex.set(element.pcb_port_id, netIndex)
   }
 
   const pcbTraceNetIndex = new Map<string, number>()
@@ -308,28 +380,45 @@ export const prepareCircuitJson = (
       .find((netIndex: number | undefined) => netIndex !== undefined)
     const netIndex =
       (directSourceNetId
-        ? netIndexBySourceNetId.get(directSourceNetId)
+        ? (netIndexBySourceNetId.get(directSourceNetId) ??
+          getOrCreateImplicitNetIndex(
+            `source-net-id:${directSourceNetId}`,
+            directSourceNetId,
+          ))
         : undefined) ??
       sourceTraceNetIndex.get(element.source_trace_id) ??
-      getConnectivityKeyNetIndex(element) ??
-      routePortNetIndex
-    if (netIndex !== undefined) {
-      pcbTraceNetIndex.set(element.pcb_trace_id, netIndex)
-    }
+      getOrCreateConnectivityKeyNetIndex(element) ??
+      routePortNetIndex ??
+      getOrCreateImplicitNetIndex(
+        `pcb-trace:${element.pcb_trace_id}`,
+        element.pcb_trace_id,
+      )
+    pcbTraceNetIndex.set(element.pcb_trace_id, netIndex)
   }
 
   const getNetIndex = (element: AnyCircuitElement): number | undefined => {
     const sourceNetId = (element as { source_net_id?: string }).source_net_id
     if (sourceNetId) {
-      const directNetIndex = netIndexBySourceNetId.get(sourceNetId)
-      if (directNetIndex !== undefined) return directNetIndex
+      return (
+        netIndexBySourceNetId.get(sourceNetId) ??
+        getOrCreateImplicitNetIndex(`source-net-id:${sourceNetId}`, sourceNetId)
+      )
     }
-    const connectivityKeyNetIndex = getConnectivityKeyNetIndex(element)
+    const connectivityKeyNetIndex = getOrCreateConnectivityKeyNetIndex(element)
     if (connectivityKeyNetIndex !== undefined) return connectivityKeyNetIndex
     if (element.type === "pcb_smtpad" || element.type === "pcb_plated_hole") {
-      return element.pcb_port_id
-        ? pcbPortNetIndex.get(element.pcb_port_id)
-        : undefined
+      if (element.pcb_port_id) {
+        const pcbPortIndex = pcbPortNetIndex.get(element.pcb_port_id)
+        if (pcbPortIndex !== undefined) return pcbPortIndex
+      }
+      const elementId =
+        element.type === "pcb_smtpad"
+          ? element.pcb_smtpad_id
+          : element.pcb_plated_hole_id
+      return getOrCreateImplicitNetIndex(
+        `${element.type}:${elementId}`,
+        elementId,
+      )
     }
     if (element.type === "pcb_trace") {
       return pcbTraceNetIndex.get(element.pcb_trace_id)
@@ -343,15 +432,28 @@ export const prepareCircuitJson = (
         const sourceTraceIndex = sourceTraceNetIndex.get(via.source_trace_id)
         if (sourceTraceIndex !== undefined) return sourceTraceIndex
       }
-      return via.pcb_trace_id
-        ? pcbTraceNetIndex.get(via.pcb_trace_id)
-        : undefined
+      if (via.pcb_trace_id) {
+        const pcbTraceIndex = pcbTraceNetIndex.get(via.pcb_trace_id)
+        if (pcbTraceIndex !== undefined) return pcbTraceIndex
+      }
+      return getOrCreateImplicitNetIndex(
+        `pcb-via:${via.pcb_via_id}`,
+        via.pcb_via_id,
+      )
     }
     return undefined
   }
 
   const primitives: CopperPrimitive[] = []
   for (const element of input.circuitJson) {
+    if (
+      element.type !== "pcb_smtpad" &&
+      element.type !== "pcb_plated_hole" &&
+      element.type !== "pcb_via" &&
+      element.type !== "pcb_trace"
+    ) {
+      continue
+    }
     const netIndex = getNetIndex(element)
     if (netIndex === undefined) continue
     if (element.type === "pcb_smtpad") {
