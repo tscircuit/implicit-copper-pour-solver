@@ -47,9 +47,10 @@ bun run start
 
 ### Visual snapshot tests
 
-The nRF52810 fixture is rendered before and after solving and compared with
-committed SVG snapshots in `tests/__snapshots__`. Snapshot mismatches generate
-`.diff.png` files, which CI uploads as artifacts.
+The nRF52810 fixture is rendered as a full board before and after solving. The
+solved result is also rendered separately for every copper layer. These images
+are compared with committed SVG snapshots in `tests/__snapshots__`. Snapshot
+mismatches generate `.diff.png` files, which CI uploads as artifacts.
 
 Update approved snapshots with:
 

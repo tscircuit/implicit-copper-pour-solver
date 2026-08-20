@@ -3,6 +3,7 @@ import type { AnyCircuitElement } from "circuit-json"
 import { getSvgFromGraphicsObject } from "graphics-debug"
 import { ImplicitCopperPourPipelineSolver } from "../lib"
 import { prepareCircuitJson } from "../lib/prepare-circuit-json"
+import { filterGraphicsByLayer } from "./fixtures/filter-graphics-by-layer"
 import { nrf52810Board } from "./fixtures/nrf52810-board"
 import { simplePowerBoard } from "./fixtures/simple-power-board"
 
@@ -64,7 +65,7 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     ).toBe(true)
     await expect(
       getSvgFromGraphicsObject(initialGraphics, { backgroundColor: "white" }),
-    ).toMatchSvgSnapshot(import.meta.path, "nrf52810-before-solve")
+    ).toMatchSvgSnapshot(import.meta.path, "nrf52810-full-board-before-solve")
 
     solver.solve()
 
@@ -92,7 +93,22 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     expect(solvedGraphics.circles?.length).toBe(initialGraphics.circles?.length)
     await expect(
       getSvgFromGraphicsObject(solvedGraphics, { backgroundColor: "white" }),
-    ).toMatchSvgSnapshot(import.meta.path, "nrf52810-after-solve")
+    ).toMatchSvgSnapshot(import.meta.path, "nrf52810-full-board-after-solve")
+
+    const topGraphics = filterGraphicsByLayer(solvedGraphics, 0)
+    const bottomGraphics = filterGraphicsByLayer(solvedGraphics, 1)
+    expect(topGraphics.polygons).toHaveLength(
+      output.filter((pour) => pour.layer === "top").length,
+    )
+    expect(bottomGraphics.polygons).toHaveLength(
+      output.filter((pour) => pour.layer === "bottom").length,
+    )
+    await expect(
+      getSvgFromGraphicsObject(topGraphics, { backgroundColor: "white" }),
+    ).toMatchSvgSnapshot(import.meta.path, "nrf52810-top-layer-after-solve")
+    await expect(
+      getSvgFromGraphicsObject(bottomGraphics, { backgroundColor: "white" }),
+    ).toMatchSvgSnapshot(import.meta.path, "nrf52810-bottom-layer-after-solve")
   })
 
   test("includes every nRF52810 SMT pad but no existing copper pours", () => {
