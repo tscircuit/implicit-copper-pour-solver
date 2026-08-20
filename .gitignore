@@ -4,5 +4,6 @@ dist
 .cursor
 bun.lock
 .DS_Store
+/index.html
 outputs
 work
