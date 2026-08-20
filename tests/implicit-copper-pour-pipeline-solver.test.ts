@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { AnyCircuitElement } from "circuit-json"
+import { getSvgFromGraphicsObject } from "graphics-debug"
 import { ImplicitCopperPourPipelineSolver } from "../lib"
 import { prepareCircuitJson } from "../lib/prepare-circuit-json"
 import { nrf52810Board } from "./fixtures/nrf52810-board"
@@ -46,7 +47,7 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     expect(solver.getOutput()[0]?.layer).toBe("top")
   })
 
-  test("solves the nRF52810 Circuit JSON fixture", () => {
+  test("solves the nRF52810 Circuit JSON fixture", async () => {
     const solver = new ImplicitCopperPourPipelineSolver({
       circuitJson: nrf52810Board,
       gridPitch: 0.5,
@@ -61,6 +62,9 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     expect(
       initialGraphics.rects?.every((rect) => rect.fill?.startsWith("rgba(")),
     ).toBe(true)
+    await expect(
+      getSvgFromGraphicsObject(initialGraphics, { backgroundColor: "white" }),
+    ).toMatchSvgSnapshot(import.meta.path, "nrf52810-before-solve")
 
     solver.solve()
 
@@ -86,6 +90,9 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     ).toBe(true)
     expect(new Set(pourGraphics.map((polygon) => polygon.stroke)).size).toBe(2)
     expect(solvedGraphics.circles?.length).toBe(initialGraphics.circles?.length)
+    await expect(
+      getSvgFromGraphicsObject(solvedGraphics, { backgroundColor: "white" }),
+    ).toMatchSvgSnapshot(import.meta.path, "nrf52810-after-solve")
   })
 
   test("includes every nRF52810 SMT pad but no existing copper pours", () => {

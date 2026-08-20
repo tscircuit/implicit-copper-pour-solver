@@ -44,3 +44,15 @@ bun run typecheck
 bun run format:check
 bun run start
 ```
+
+### Visual snapshot tests
+
+The nRF52810 fixture is rendered before and after solving and compared with
+committed SVG snapshots in `tests/__snapshots__`. Snapshot mismatches generate
+`.diff.png` files, which CI uploads as artifacts.
+
+Update approved snapshots with:
+
+```sh
+bun run test:update-snapshots
+```

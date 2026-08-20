@@ -7,6 +7,7 @@
   "files": ["lib"],
   "scripts": {
     "test": "bun test",
+    "test:update-snapshots": "BUN_UPDATE_SNAPSHOTS=1 bun test",
     "typecheck": "tsc --noEmit",
     "format": "biome format . --write",
     "format:check": "biome format .",
@@ -26,6 +27,7 @@
     "@types/bun": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "bun-match-svg": "^0.0.14",
     "circuit-json": "^0.0.472",
     "graphics-debug": "^0.0.100",
     "react": "^19.1.1",
