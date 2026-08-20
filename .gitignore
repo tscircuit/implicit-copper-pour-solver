@@ -1,0 +1,8 @@
+node_modules
+cosmos-export
+dist
+.cursor
+bun.lock
+.DS_Store
+outputs
+work
