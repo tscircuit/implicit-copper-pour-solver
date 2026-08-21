@@ -17,3 +17,11 @@ jobs:
           bun-version: latest
       - run: bun install
       - run: bun test
+      - name: Upload SVG snapshot diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: svg-snapshot-artifacts
+          path: |
+            **/*.diff.png
+            **/*.snap.svg
