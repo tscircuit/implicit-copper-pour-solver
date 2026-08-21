@@ -50,6 +50,72 @@ const getPrimitiveLabel = (
   return `${net?.name ?? net?.source_net_id ?? "unknown net"} ${kind}`
 }
 
+type GraphicsPoint = { x: number; y: number }
+
+const getPointKey = (point: GraphicsPoint): string => `${point.x},${point.y}`
+
+const getVisibleBoundaryPaths = (
+  points: GraphicsPoint[],
+): GraphicsPoint[][] => {
+  const edges = points.map((start, index) => ({
+    start,
+    end: points[(index + 1) % points.length]!,
+  }))
+  const edgeCounts = new Map<string, number>()
+  const getEdgeKey = (start: GraphicsPoint, end: GraphicsPoint): string => {
+    const startKey = getPointKey(start)
+    const endKey = getPointKey(end)
+    return startKey < endKey ? `${startKey}|${endKey}` : `${endKey}|${startKey}`
+  }
+  for (const edge of edges) {
+    const key = getEdgeKey(edge.start, edge.end)
+    edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1)
+  }
+
+  const boundaryEdges = edges.filter(
+    (edge) => edgeCounts.get(getEdgeKey(edge.start, edge.end)) === 1,
+  )
+  const edgeIndexesByPoint = new Map<string, number[]>()
+  for (const [edgeIndex, edge] of boundaryEdges.entries()) {
+    for (const point of [edge.start, edge.end]) {
+      const key = getPointKey(point)
+      const indexes = edgeIndexesByPoint.get(key) ?? []
+      indexes.push(edgeIndex)
+      edgeIndexesByPoint.set(key, indexes)
+    }
+  }
+
+  const visited = new Set<number>()
+  const paths: GraphicsPoint[][] = []
+  for (
+    let startEdgeIndex = 0;
+    startEdgeIndex < boundaryEdges.length;
+    startEdgeIndex++
+  ) {
+    if (visited.has(startEdgeIndex)) continue
+    const startEdge = boundaryEdges[startEdgeIndex]!
+    const path = [startEdge.start, startEdge.end]
+    visited.add(startEdgeIndex)
+
+    while (getPointKey(path.at(-1)!) !== getPointKey(path[0]!)) {
+      const current = path.at(-1)!
+      const nextEdgeIndex = edgeIndexesByPoint
+        .get(getPointKey(current))
+        ?.find((edgeIndex) => !visited.has(edgeIndex))
+      if (nextEdgeIndex === undefined) break
+      const nextEdge = boundaryEdges[nextEdgeIndex]!
+      path.push(
+        getPointKey(nextEdge.start) === getPointKey(current)
+          ? nextEdge.end
+          : nextEdge.start,
+      )
+      visited.add(nextEdgeIndex)
+    }
+    paths.push(path)
+  }
+  return paths
+}
+
 export const visualizePreparedProblem = (
   problem: PreparedProblem,
 ): GraphicsObject => {
@@ -136,33 +202,49 @@ export const visualizePreparedProblem = (
 export const visualizePowerPours = (
   problem: PreparedProblem,
   pours: ImplicitCopperPourSolverOutput,
-): GraphicsObject => ({
-  coordinateSystem: "cartesian",
-  title: "Power-net copper pour polygons",
-  points: [],
-  rects: [],
-  circles: [],
-  lines: [],
-  polygons: pours.flatMap((pour) => {
-    if (pour.shape !== "polygon") return []
+): GraphicsObject => {
+  const polygons: NonNullable<GraphicsObject["polygons"]> = []
+  const lines: NonNullable<GraphicsObject["lines"]> = []
+
+  for (const pour of pours) {
+    if (pour.shape !== "polygon") continue
     const netIndex = problem.nets.findIndex(
       ({ sourceNet }) => sourceNet.source_net_id === pour.source_net_id,
     )
     const color = NET_COLORS[Math.max(0, netIndex) % NET_COLORS.length]!
     const sourceNet = problem.nets[netIndex]?.sourceNet
-    return [
-      {
-        points: pour.points,
-        fill: colorWithOpacity(color, POUR_OPACITY),
-        stroke: color,
+    const layer = getGraphicsLayer([pour.layer])
+    const label = `${sourceNet?.name ?? pour.source_net_id ?? "power net"} ${pour.layer} pour`
+    polygons.push({
+      points: pour.points,
+      fill: colorWithOpacity(color, POUR_OPACITY),
+      stroke: color,
+      strokeWidth: 0,
+      layer,
+      label,
+    })
+    lines.push(
+      ...getVisibleBoundaryPaths(pour.points).map((points) => ({
+        points,
+        strokeColor: color,
         strokeWidth: 0.06,
-        layer: getGraphicsLayer([pour.layer]),
-        label: `${sourceNet?.name ?? pour.source_net_id ?? "power net"} ${pour.layer} pour`,
-      },
-    ]
-  }),
-  texts: [],
-})
+        layer,
+        label,
+      })),
+    )
+  }
+
+  return {
+    coordinateSystem: "cartesian",
+    title: "Power-net copper pour polygons",
+    points: [],
+    rects: [],
+    circles: [],
+    lines,
+    polygons,
+    texts: [],
+  }
+}
 
 export const mergeSolverGraphics = (
   source: GraphicsObject,
