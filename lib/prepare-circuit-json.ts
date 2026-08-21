@@ -211,8 +211,16 @@ export const prepareCircuitJson = (
   input: ImplicitCopperPourSolverInput,
 ): PreparedProblem => {
   const gridPitch = input.gridPitch ?? DEFAULT_GRID_PITCH
+  const edgeSimplificationTolerance =
+    input.edgeSimplificationTolerance ?? gridPitch
   const minRegionArea = input.minRegionArea ?? DEFAULT_MIN_REGION_AREA
   if (!(gridPitch > 0)) throw new Error("gridPitch must be greater than zero")
+  if (
+    !Number.isFinite(edgeSimplificationTolerance) ||
+    edgeSimplificationTolerance < 0
+  ) {
+    throw new Error("edgeSimplificationTolerance must be zero or greater")
+  }
   if (!(minRegionArea >= 0)) {
     throw new Error("minRegionArea must be zero or greater")
   }

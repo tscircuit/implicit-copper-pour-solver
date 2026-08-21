@@ -11,6 +11,7 @@ import {
   getLayerColor,
 } from "./grid-solver"
 import { prepareCircuitJson } from "./prepare-circuit-json"
+import { simplifyPolygonEdges } from "./simplify-polygon-edges"
 import type {
   ImplicitCopperPourSolverInput,
   ImplicitCopperPourSolverOutput,
@@ -105,6 +106,63 @@ class TracePowerPolygonsSolver extends BaseSolver {
   }
 }
 
+class SimplifyPolygonEdgesSolver extends BaseSolver {
+  private output?: ImplicitCopperPourSolverOutput
+
+  constructor(
+    private input: {
+      pours: ImplicitCopperPourSolverOutput
+      tolerance: number
+    },
+  ) {
+    super()
+  }
+
+  override _step() {
+    let inputPoints = 0
+    let outputPoints = 0
+    this.output = this.input.pours.map((pour) => {
+      if (pour.shape !== "polygon") return pour
+      inputPoints += pour.points.length
+      const points = simplifyPolygonEdges(pour.points, this.input.tolerance)
+      outputPoints += points.length
+      return { ...pour, points }
+    })
+    this.stats = {
+      polygons: this.output.length,
+      inputPoints,
+      outputPoints,
+      pointsRemoved: inputPoints - outputPoints,
+    }
+    this.solved = true
+  }
+
+  override getOutput(): ImplicitCopperPourSolverOutput {
+    if (!this.output) throw new Error("Polygon edges have not been simplified")
+    return this.output
+  }
+
+  override visualize(): GraphicsObject {
+    return {
+      points: [],
+      rects: [],
+      circles: [],
+      texts: [],
+      lines: (this.output ?? []).flatMap((pour) => {
+        if (pour.shape !== "polygon") return []
+        return [
+          {
+            points: [...pour.points, pour.points[0]!],
+            strokeColor: getLayerColor(pour.layer),
+            strokeWidth: 0.08,
+            label: pour.source_net_id,
+          },
+        ]
+      }),
+    }
+  }
+}
+
 export class ImplicitCopperPourPipelineSolver extends BasePipelineSolver<ImplicitCopperPourSolverInput> {
   private initialPreparedProblem?: PreparedProblem
 
@@ -128,6 +186,25 @@ export class ImplicitCopperPourPipelineSolver extends BasePipelineSolver<Implici
         instance.getStageOutput<LabeledProblem>("assignGridCells")!,
       ],
     ),
+    definePipelineStep(
+      "simplifyPolygonEdges",
+      SimplifyPolygonEdgesSolver,
+      (instance: ImplicitCopperPourPipelineSolver) => {
+        const preparedProblem =
+          instance.getStageOutput<PreparedProblem>("prepareCircuitJson")!
+        return [
+          {
+            pours:
+              instance.getStageOutput<ImplicitCopperPourSolverOutput>(
+                "tracePowerPolygons",
+              )!,
+            tolerance:
+              instance.inputProblem.edgeSimplificationTolerance ??
+              preparedProblem.gridPitch,
+          },
+        ]
+      },
+    ),
   ]
 
   override getSolverName(): string {
@@ -141,7 +218,7 @@ export class ImplicitCopperPourPipelineSolver extends BasePipelineSolver<Implici
   override getOutput(): ImplicitCopperPourSolverOutput {
     return (
       this.getStageOutput<ImplicitCopperPourSolverOutput>(
-        "tracePowerPolygons",
+        "simplifyPolygonEdges",
       ) ?? []
     )
   }
@@ -153,8 +230,12 @@ export class ImplicitCopperPourPipelineSolver extends BasePipelineSolver<Implici
     const sourceGraphics = visualizePreparedProblem(preparedProblem)
     const pours =
       this.getStageOutput<ImplicitCopperPourSolverOutput>(
+        "simplifyPolygonEdges",
+      ) ??
+      this.getStageOutput<ImplicitCopperPourSolverOutput>(
         "tracePowerPolygons",
-      ) ?? []
+      ) ??
+      []
 
     return mergeSolverGraphics(
       sourceGraphics,

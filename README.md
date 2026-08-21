@@ -11,7 +11,8 @@ The solver follows the power-trace-expansion algorithm from the supplied
 3. Group four-connected cells with the same nearest net.
 4. Discard regions below the configured minimum area.
 5. Trace each surviving grid region into a rectilinear polygon.
-6. Emit polygons only when the owning `source_net` has `is_power`, `is_ground`,
+6. Simplify the traced edges to smooth grid-generated stair steps.
+7. Emit polygons only when the owning `source_net` has `is_power`, `is_ground`,
    or `is_positive_voltage_source` set.
 
 ## Usage
@@ -22,6 +23,7 @@ import { ImplicitCopperPourPipelineSolver } from "@tscircuit/implicit-copper-pou
 const solver = new ImplicitCopperPourPipelineSolver({
   circuitJson,
   gridPitch: 0.25,
+  edgeSimplificationTolerance: 0.25,
   minRegionArea: 2,
   layers: ["top", "bottom"],
 })
@@ -32,8 +34,10 @@ const circuitJsonWithPours = [...circuitJson, ...copperPourElements]
 ```
 
 The class extends `BasePipelineSolver` from `@tscircuit/solver-utils` and uses
-three debugger-visible stages: Circuit JSON preparation, nearest-net grid
-assignment, and power polygon tracing.
+four debugger-visible stages: Circuit JSON preparation, nearest-net grid
+assignment, power polygon tracing, and edge simplification. The simplification
+tolerance defaults to `gridPitch`; set `edgeSimplificationTolerance` to `0` to
+keep the traced grid edges unchanged.
 
 ## Development
 

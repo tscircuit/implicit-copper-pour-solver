@@ -10,6 +10,11 @@ export interface ImplicitCopperPourSolverInput {
   circuitJson: AnyCircuitElement[]
   /** Grid spacing in millimetres. Matches the artifact's 0.25 mm default. */
   gridPitch?: number
+  /**
+   * Maximum edge deviation in millimetres when smoothing traced grid polygons.
+   * Defaults to gridPitch. Set to zero to disable edge simplification.
+   */
+  edgeSimplificationTolerance?: number
   /** Four-connected regions smaller than this area are discarded. */
   minRegionArea?: number
   /** Copper layers to solve. Defaults to top and bottom. */
