@@ -48,6 +48,116 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     expect(solver.getOutput()[0]?.layer).toBe("top")
   })
 
+  test("uses PCB endpoint connectivity when source trace metadata is stale", () => {
+    const circuitJson = [
+      {
+        type: "pcb_board",
+        pcb_board_id: "board",
+        center: { x: 0, y: 0 },
+        width: 4,
+        height: 4,
+        thickness: 1.4,
+        num_layers: 2,
+        material: "fr4",
+      },
+      {
+        type: "source_net",
+        source_net_id: "positive-rail",
+        name: "POWER",
+        member_source_group_ids: [],
+        is_power: true,
+      },
+      {
+        type: "source_net",
+        source_net_id: "return-rail",
+        name: "RETURN",
+        member_source_group_ids: [],
+        is_ground: true,
+      },
+      {
+        type: "source_port",
+        source_port_id: "positive-terminal-a",
+        name: "A",
+      },
+      {
+        type: "source_port",
+        source_port_id: "positive-terminal-b",
+        name: "B",
+      },
+      {
+        type: "source_port",
+        source_port_id: "return-terminal",
+        name: "C",
+      },
+      {
+        type: "source_trace",
+        source_trace_id: "positive-connection",
+        connected_source_port_ids: [
+          "positive-terminal-a",
+          "positive-terminal-b",
+        ],
+        connected_source_net_ids: ["positive-rail"],
+      },
+      {
+        type: "source_trace",
+        source_trace_id: "return-connection",
+        connected_source_port_ids: ["return-terminal"],
+        connected_source_net_ids: ["return-rail"],
+      },
+      {
+        type: "pcb_port",
+        pcb_port_id: "pcb-terminal-a",
+        source_port_id: "positive-terminal-a",
+        pcb_component_id: "component-a",
+        x: -1,
+        y: 0,
+        layers: ["top"],
+      },
+      {
+        type: "pcb_port",
+        pcb_port_id: "pcb-terminal-b",
+        source_port_id: "positive-terminal-b",
+        pcb_component_id: "component-b",
+        x: 1,
+        y: 0,
+        layers: ["top"],
+      },
+      {
+        type: "pcb_trace",
+        pcb_trace_id: "routed-connection",
+        source_trace_id: "return-connection",
+        route: [
+          {
+            route_type: "wire",
+            x: -1,
+            y: 0,
+            width: 0.2,
+            layer: "top",
+            start_pcb_port_id: "pcb-terminal-a",
+          },
+          {
+            route_type: "wire",
+            x: 1,
+            y: 0,
+            width: 0.2,
+            layer: "top",
+            end_pcb_port_id: "pcb-terminal-b",
+          },
+        ],
+      },
+    ] as unknown as AnyCircuitElement[]
+
+    const prepared = prepareCircuitJson({ circuitJson })
+    const tracePrimitive = prepared.primitives.find(
+      (primitive) => primitive.kind === "segment",
+    )
+
+    expect(tracePrimitive).toBeDefined()
+    expect(
+      prepared.nets[tracePrimitive!.netIndex]?.sourceNet.source_net_id,
+    ).toBe("positive-rail")
+  })
+
   test("solves the nRF52810 Circuit JSON fixture", async () => {
     const solver = new ImplicitCopperPourPipelineSolver({
       circuitJson: nrf52810Board,
