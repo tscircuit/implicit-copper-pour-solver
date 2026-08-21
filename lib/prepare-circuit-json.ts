@@ -12,11 +12,20 @@ import type {
   SourceNet,
 } from "circuit-json"
 import { getElementId } from "@tscircuit/circuit-json-util"
+import { distance } from "@tscircuit/math-utils"
 import {
   ConnectivityMap,
   findConnectedNetworks,
   getSourcePortConnectivityMapFromCircuitJson,
 } from "circuit-json-to-connectivity-map"
+import {
+  applyToPoint,
+  applyToPoints,
+  compose,
+  rotate,
+  rotateDEG,
+  translate,
+} from "transformation-matrix"
 import type {
   CopperPrimitive,
   ExistingCopperRegion,
@@ -58,16 +67,23 @@ const addPillPrimitive = (
   const { layers, netIndex, x, y, width, height, rotation } = params
   const radius = Math.min(width, height) / 2
   const axisLength = Math.max(width, height) - radius * 2
-  const axisAngle = ((rotation + (height > width ? 90 : 0)) * Math.PI) / 180
+  const axisAngle = rotation + (height > width ? 90 : 0)
   const halfAxis = axisLength / 2
+  const [start, end] = applyToPoints(
+    compose(translate(x, y), rotateDEG(axisAngle)),
+    [
+      { x: -halfAxis, y: 0 },
+      { x: halfAxis, y: 0 },
+    ],
+  )
   primitives.push({
     kind: "segment",
     layers,
     netIndex,
-    x1: x - Math.cos(axisAngle) * halfAxis,
-    y1: y - Math.sin(axisAngle) * halfAxis,
-    x2: x + Math.cos(axisAngle) * halfAxis,
-    y2: y + Math.sin(axisAngle) * halfAxis,
+    x1: start!.x,
+    y1: start!.y,
+    x2: end!.x,
+    y2: end!.y,
     halfWidth: radius,
   })
 }
@@ -231,7 +247,7 @@ const linearizeRing = (ring: PointWithBulge[]): Point[] => {
     points.push({ x: start.x, y: start.y })
 
     const bulge = start.bulge ?? 0
-    const chordLength = Math.hypot(end.x - start.x, end.y - start.y)
+    const chordLength = distance(start, end)
     if (Math.abs(bulge) < 1e-9 || chordLength < 1e-9) continue
 
     const sweepAngle = 4 * Math.atan(bulge)
@@ -248,18 +264,21 @@ const linearizeRing = (ring: PointWithBulge[]): Point[] => {
       x: midpoint.x + leftNormal.x * centerOffset,
       y: midpoint.y + leftNormal.y * centerOffset,
     }
-    const radius = Math.hypot(start.x - center.x, start.y - center.y)
-    const startAngle = Math.atan2(start.y - center.y, start.x - center.x)
     const segmentCount = Math.max(
       2,
       Math.ceil(Math.abs(sweepAngle) / (Math.PI / 18)),
     )
     for (let segmentIndex = 1; segmentIndex < segmentCount; segmentIndex++) {
-      const angle = startAngle + (sweepAngle * segmentIndex) / segmentCount
-      points.push({
-        x: center.x + Math.cos(angle) * radius,
-        y: center.y + Math.sin(angle) * radius,
-      })
+      points.push(
+        applyToPoint(
+          rotate(
+            (sweepAngle * segmentIndex) / segmentCount,
+            center.x,
+            center.y,
+          ),
+          start,
+        ),
+      )
     }
   }
   return points
@@ -270,18 +289,29 @@ const getExistingCopperRegion = (
   netIndex: number,
 ): ExistingCopperRegion | undefined => {
   if (pour.shape === "rect") {
-    const angle = ((pour.rotation ?? 0) * Math.PI) / 180
     const halfWidth = pour.width / 2
     const halfHeight = pour.height / 2
-    const outerRing = [
-      { x: -halfWidth, y: -halfHeight },
-      { x: halfWidth, y: -halfHeight },
-      { x: halfWidth, y: halfHeight },
-      { x: -halfWidth, y: halfHeight },
-    ].map((point) => ({
-      x: pour.center.x + point.x * Math.cos(angle) - point.y * Math.sin(angle),
-      y: pour.center.y + point.x * Math.sin(angle) + point.y * Math.cos(angle),
-    }))
+    const outerRing = applyToPoints(
+      rotateDEG(pour.rotation ?? 0, pour.center.x, pour.center.y),
+      [
+        {
+          x: pour.center.x - halfWidth,
+          y: pour.center.y - halfHeight,
+        },
+        {
+          x: pour.center.x + halfWidth,
+          y: pour.center.y - halfHeight,
+        },
+        {
+          x: pour.center.x + halfWidth,
+          y: pour.center.y + halfHeight,
+        },
+        {
+          x: pour.center.x - halfWidth,
+          y: pour.center.y + halfHeight,
+        },
+      ],
+    )
     return { layer: pour.layer, netIndex, outerRing, innerRings: [] }
   }
 

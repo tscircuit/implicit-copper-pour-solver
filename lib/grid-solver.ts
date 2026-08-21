@@ -8,7 +8,7 @@ import {
 } from "./geometry"
 import type { LabeledLayer, LabeledProblem, PreparedProblem } from "./types"
 
-const BLOCKED_BY_EXISTING_COPPER = -2
+const BLOCKED_BY_CONFLICTING_EXISTING_COPPER = -2
 
 export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
   const { bounds, boardOutline, gridPitch } = problem
@@ -32,17 +32,25 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
         if (!isPointInsidePolygon({ x, y }, boardOutline)) continue
 
         const halfPitch = gridPitch / 2
-        const overlapsExistingCopper = existingCopperRegions.some((region) =>
-          doesRectIntersectExistingCopperRegion(
-            region,
-            x - halfPitch,
-            y - halfPitch,
-            x + halfPitch,
-            y + halfPitch,
-          ),
+        const existingCopperNetIndexes = new Set(
+          existingCopperRegions
+            .filter((region) =>
+              doesRectIntersectExistingCopperRegion(
+                region,
+                x - halfPitch,
+                y - halfPitch,
+                x + halfPitch,
+                y + halfPitch,
+              ),
+            )
+            .map((region) => region.netIndex),
         )
-        if (overlapsExistingCopper) {
-          labels[j * nx + i] = BLOCKED_BY_EXISTING_COPPER
+        if (existingCopperNetIndexes.size === 1) {
+          labels[j * nx + i] = existingCopperNetIndexes.values().next().value!
+          continue
+        }
+        if (existingCopperNetIndexes.size > 1) {
+          labels[j * nx + i] = BLOCKED_BY_CONFLICTING_EXISTING_COPPER
           continue
         }
 

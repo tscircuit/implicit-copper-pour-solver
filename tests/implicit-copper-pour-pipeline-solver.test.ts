@@ -393,8 +393,17 @@ describe("ImplicitCopperPourPipelineSolver", () => {
       ).flat()
       const pourCenter = { x: 3, y: 0 }
       const output = solver.getOutput()
-      const topPours = output.filter(
-        (pour) => pour.layer === "top" && pour.shape === "polygon",
+      const topForeignPours = output.filter(
+        (pour) =>
+          pour.layer === "top" &&
+          pour.source_net_id !== "source_net_gnd" &&
+          pour.shape === "polygon",
+      )
+      const topGndPours = output.filter(
+        (pour) =>
+          pour.layer === "top" &&
+          pour.source_net_id === "source_net_gnd" &&
+          pour.shape === "polygon",
       )
       const bottomVbatPours = output.filter(
         (pour) =>
@@ -405,11 +414,18 @@ describe("ImplicitCopperPourPipelineSolver", () => {
 
       expect(
         pointsInsideExistingPour.every((point) =>
-          topPours.every(
+          topForeignPours.every(
             (pour) =>
               pour.shape !== "polygon" ||
               !isPointInsidePolygon(point, pour.points),
           ),
+        ),
+      ).toBe(true)
+      expect(
+        topGndPours.some(
+          (pour) =>
+            pour.shape === "polygon" &&
+            isPointInsidePolygon(pourCenter, pour.points),
         ),
       ).toBe(true)
       expect(

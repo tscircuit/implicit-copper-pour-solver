@@ -7,8 +7,9 @@ The solver follows the power-trace-expansion algorithm from the supplied
 [JSX artifact](https://claude.ai/public/artifacts/e5ef6abf-7d47-478f-b76a-3d0d1ff3d55d):
 
 1. Sample a regular grid on each selected copper layer.
-2. Reserve cells touched by existing rectangular, polygon, or BRep
-   `pcb_copper_pour` elements on their declared layer.
+2. Assign cells touched by an existing rectangular, polygon, or BRep
+   `pcb_copper_pour` to that pour's net on its declared layer, blocking cells
+   where existing pours from different nets conflict.
 3. Assign every remaining in-board sample to its nearest net-owned pad, trace,
    via, or existing copper region.
 4. Group four-connected cells with the same nearest net.

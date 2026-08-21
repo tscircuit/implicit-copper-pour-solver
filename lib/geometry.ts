@@ -1,22 +1,11 @@
 import type { Point } from "circuit-json"
+import {
+  distance,
+  doSegmentsIntersect,
+  pointToSegmentDistance,
+} from "@tscircuit/math-utils"
+import { applyToPoint, rotateDEG } from "transformation-matrix"
 import type { CopperPrimitive, ExistingCopperRegion } from "./types"
-
-const distanceToSegment = (
-  px: number,
-  py: number,
-  x1: number,
-  y1: number,
-  x2: number,
-  y2: number,
-): number => {
-  const vx = x2 - x1
-  const vy = y2 - y1
-  const lengthSquared = vx * vx + vy * vy
-  const unclampedT =
-    lengthSquared > 0 ? ((px - x1) * vx + (py - y1) * vy) / lengthSquared : 0
-  const t = Math.max(0, Math.min(1, unclampedT))
-  return Math.hypot(px - (x1 + t * vx), py - (y1 + t * vy))
-}
 
 export const isPointInsidePolygon = (
   point: Point,
@@ -39,10 +28,7 @@ const distanceToPolygonBoundary = (point: Point, polygon: Point[]): number => {
   for (let index = 0; index < polygon.length; index++) {
     const start = polygon[index]!
     const end = polygon[(index + 1) % polygon.length]!
-    best = Math.min(
-      best,
-      distanceToSegment(point.x, point.y, start.x, start.y, end.x, end.y),
-    )
+    best = Math.min(best, pointToSegmentDistance(point, start, end))
   }
   return best
 }
@@ -64,48 +50,6 @@ export const distanceToExistingCopperRegion = (
     isPointInsidePolygon(point, ring),
   )
   return containingHole ? distanceToPolygonBoundary(point, containingHole) : 0
-}
-
-const crossProduct = (a: Point, b: Point, c: Point): number =>
-  (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
-
-const isPointOnSegment = (point: Point, start: Point, end: Point): boolean => {
-  const epsilon = 1e-9
-  return (
-    Math.abs(crossProduct(start, end, point)) <= epsilon &&
-    point.x >= Math.min(start.x, end.x) - epsilon &&
-    point.x <= Math.max(start.x, end.x) + epsilon &&
-    point.y >= Math.min(start.y, end.y) - epsilon &&
-    point.y <= Math.max(start.y, end.y) + epsilon
-  )
-}
-
-const segmentsIntersect = (
-  firstStart: Point,
-  firstEnd: Point,
-  secondStart: Point,
-  secondEnd: Point,
-): boolean => {
-  const firstCrossStart = crossProduct(firstStart, firstEnd, secondStart)
-  const firstCrossEnd = crossProduct(firstStart, firstEnd, secondEnd)
-  const secondCrossStart = crossProduct(secondStart, secondEnd, firstStart)
-  const secondCrossEnd = crossProduct(secondStart, secondEnd, firstEnd)
-
-  if (
-    ((firstCrossStart > 0 && firstCrossEnd < 0) ||
-      (firstCrossStart < 0 && firstCrossEnd > 0)) &&
-    ((secondCrossStart > 0 && secondCrossEnd < 0) ||
-      (secondCrossStart < 0 && secondCrossEnd > 0))
-  ) {
-    return true
-  }
-
-  return (
-    isPointOnSegment(secondStart, firstStart, firstEnd) ||
-    isPointOnSegment(secondEnd, firstStart, firstEnd) ||
-    isPointOnSegment(firstStart, secondStart, secondEnd) ||
-    isPointOnSegment(firstEnd, secondStart, secondEnd)
-  )
 }
 
 const getRectCorners = (
@@ -138,7 +82,7 @@ const doesPolygonBoundaryIntersectRect = (
     const polygonEnd = polygon[(polygonIndex + 1) % polygon.length]!
     for (let rectIndex = 0; rectIndex < rectCorners.length; rectIndex++) {
       if (
-        segmentsIntersect(
+        doSegmentsIntersect(
           polygonStart,
           polygonEnd,
           rectCorners[rectIndex]!,
@@ -194,20 +138,18 @@ export const distanceToPrimitive = (
 ): number => {
   if (primitive.kind === "circle") {
     return Math.max(
-      Math.hypot(px - primitive.x, py - primitive.y) - primitive.radius,
+      distance({ x: px, y: py }, { x: primitive.x, y: primitive.y }) -
+        primitive.radius,
       0,
     )
   }
 
   if (primitive.kind === "segment") {
     return Math.max(
-      distanceToSegment(
-        px,
-        py,
-        primitive.x1,
-        primitive.y1,
-        primitive.x2,
-        primitive.y2,
+      pointToSegmentDistance(
+        { x: px, y: py },
+        { x: primitive.x1, y: primitive.y1 },
+        { x: primitive.x2, y: primitive.y2 },
       ) - primitive.halfWidth,
       0,
     )
@@ -217,14 +159,19 @@ export const distanceToPrimitive = (
     return distanceToPolygon({ x: px, y: py }, primitive.points)
   }
 
-  const angle = (-primitive.rotation * Math.PI) / 180
-  const dx = px - primitive.x
-  const dy = py - primitive.y
-  const localX = dx * Math.cos(angle) - dy * Math.sin(angle)
-  const localY = dx * Math.sin(angle) + dy * Math.cos(angle)
-  const outsideX = Math.max(Math.abs(localX) - primitive.halfWidth, 0)
-  const outsideY = Math.max(Math.abs(localY) - primitive.halfHeight, 0)
-  return Math.hypot(outsideX, outsideY)
+  const localPoint = applyToPoint(
+    rotateDEG(-primitive.rotation, primitive.x, primitive.y),
+    { x: px, y: py },
+  )
+  const outsideX = Math.max(
+    Math.abs(localPoint.x - primitive.x) - primitive.halfWidth,
+    0,
+  )
+  const outsideY = Math.max(
+    Math.abs(localPoint.y - primitive.y) - primitive.halfHeight,
+    0,
+  )
+  return distance({ x: 0, y: 0 }, { x: outsideX, y: outsideY })
 }
 
 export const traceLoops = (
