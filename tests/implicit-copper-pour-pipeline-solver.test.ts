@@ -161,7 +161,7 @@ describe("ImplicitCopperPourPipelineSolver", () => {
   test("solves the nRF52810 Circuit JSON fixture", async () => {
     const solver = new ImplicitCopperPourPipelineSolver({
       circuitJson: nrf52810Board,
-      gridPitch: 0.5,
+      gridPitch: 0.25,
       minRegionArea: 2,
     })
 
