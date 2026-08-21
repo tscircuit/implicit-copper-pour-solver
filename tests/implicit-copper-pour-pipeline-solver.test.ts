@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
+import { isPointInsidePolygon } from "@tscircuit/math-utils"
 import type { AnyCircuitElement } from "circuit-json"
 import { getSvgFromGraphicsObject } from "graphics-debug"
 import { ImplicitCopperPourPipelineSolver } from "../lib"
-import { isPointInsidePolygon } from "../lib/geometry"
 import { prepareCircuitJson } from "../lib/prepare-circuit-json"
 import { filterGraphicsByLayer } from "./fixtures/filter-graphics-by-layer"
 import { nrf52810Board } from "./fixtures/nrf52810-board"
@@ -393,17 +393,8 @@ describe("ImplicitCopperPourPipelineSolver", () => {
       ).flat()
       const pourCenter = { x: 3, y: 0 }
       const output = solver.getOutput()
-      const topForeignPours = output.filter(
-        (pour) =>
-          pour.layer === "top" &&
-          pour.source_net_id !== "source_net_gnd" &&
-          pour.shape === "polygon",
-      )
-      const topGndPours = output.filter(
-        (pour) =>
-          pour.layer === "top" &&
-          pour.source_net_id === "source_net_gnd" &&
-          pour.shape === "polygon",
+      const topImplicitPours = output.filter(
+        (pour) => pour.layer === "top" && pour.shape === "polygon",
       )
       const bottomVbatPours = output.filter(
         (pour) =>
@@ -414,7 +405,7 @@ describe("ImplicitCopperPourPipelineSolver", () => {
 
       expect(
         pointsInsideExistingPour.every((point) =>
-          topForeignPours.every(
+          topImplicitPours.every(
             (pour) =>
               pour.shape !== "polygon" ||
               !isPointInsidePolygon(point, pour.points),
@@ -422,10 +413,8 @@ describe("ImplicitCopperPourPipelineSolver", () => {
         ),
       ).toBe(true)
       expect(
-        topGndPours.some(
-          (pour) =>
-            pour.shape === "polygon" &&
-            isPointInsidePolygon(pourCenter, pour.points),
+        topImplicitPours.some(
+          (pour) => pour.shape === "polygon" && pour.points.length > 4,
         ),
       ).toBe(true)
       expect(

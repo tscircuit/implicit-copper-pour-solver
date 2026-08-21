@@ -1,27 +1,13 @@
 import type { Point } from "circuit-json"
 import {
+  areBoundsCompletelyInsidePolygon,
+  areBoundsOverlappingPolygon,
   distance,
-  doSegmentsIntersect,
+  isPointInsidePolygon,
   pointToSegmentDistance,
 } from "@tscircuit/math-utils"
 import { applyToPoint, rotateDEG } from "transformation-matrix"
 import type { CopperPrimitive, ExistingCopperRegion } from "./types"
-
-export const isPointInsidePolygon = (
-  point: Point,
-  polygon: Point[],
-): boolean => {
-  let inside = false
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const a = polygon[i]!
-    const b = polygon[j]!
-    const crosses =
-      a.y > point.y !== b.y > point.y &&
-      point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x
-    if (crosses) inside = !inside
-  }
-  return inside
-}
 
 const distanceToPolygonBoundary = (point: Point, polygon: Point[]): number => {
   let best = Number.POSITIVE_INFINITY
@@ -52,65 +38,6 @@ export const distanceToExistingCopperRegion = (
   return containingHole ? distanceToPolygonBoundary(point, containingHole) : 0
 }
 
-const getRectCorners = (
-  minX: number,
-  minY: number,
-  maxX: number,
-  maxY: number,
-): Point[] => [
-  { x: minX, y: minY },
-  { x: maxX, y: minY },
-  { x: maxX, y: maxY },
-  { x: minX, y: maxY },
-]
-
-const isPointInsideRect = (
-  point: Point,
-  minX: number,
-  minY: number,
-  maxX: number,
-  maxY: number,
-): boolean =>
-  point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY
-
-const doesPolygonBoundaryIntersectRect = (
-  polygon: Point[],
-  rectCorners: Point[],
-): boolean => {
-  for (let polygonIndex = 0; polygonIndex < polygon.length; polygonIndex++) {
-    const polygonStart = polygon[polygonIndex]!
-    const polygonEnd = polygon[(polygonIndex + 1) % polygon.length]!
-    for (let rectIndex = 0; rectIndex < rectCorners.length; rectIndex++) {
-      if (
-        doSegmentsIntersect(
-          polygonStart,
-          polygonEnd,
-          rectCorners[rectIndex]!,
-          rectCorners[(rectIndex + 1) % rectCorners.length]!,
-        )
-      ) {
-        return true
-      }
-    }
-  }
-  return false
-}
-
-const doesPolygonIntersectRect = (
-  polygon: Point[],
-  minX: number,
-  minY: number,
-  maxX: number,
-  maxY: number,
-): boolean => {
-  const rectCorners = getRectCorners(minX, minY, maxX, maxY)
-  return (
-    rectCorners.some((corner) => isPointInsidePolygon(corner, polygon)) ||
-    polygon.some((point) => isPointInsideRect(point, minX, minY, maxX, maxY)) ||
-    doesPolygonBoundaryIntersectRect(polygon, rectCorners)
-  )
-}
-
 export const doesRectIntersectExistingCopperRegion = (
   region: ExistingCopperRegion,
   minX: number,
@@ -118,15 +45,13 @@ export const doesRectIntersectExistingCopperRegion = (
   maxX: number,
   maxY: number,
 ): boolean => {
-  if (!doesPolygonIntersectRect(region.outerRing, minX, minY, maxX, maxY)) {
+  const bounds = { minX, minY, maxX, maxY }
+  if (!areBoundsOverlappingPolygon(bounds, region.outerRing)) {
     return false
   }
 
-  const rectCorners = getRectCorners(minX, minY, maxX, maxY)
-  const containingHole = region.innerRings.find(
-    (ring) =>
-      rectCorners.every((corner) => isPointInsidePolygon(corner, ring)) &&
-      !doesPolygonBoundaryIntersectRect(ring, rectCorners),
+  const containingHole = region.innerRings.find((ring) =>
+    areBoundsCompletelyInsidePolygon(bounds, ring),
   )
   return containingHole === undefined
 }

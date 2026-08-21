@@ -1,14 +1,17 @@
 import type { LayerRef, PcbCopperPour, Point } from "circuit-json"
 import {
+  getSegmentIntersection,
+  isPointInsidePolygon,
+} from "@tscircuit/math-utils"
+import {
   distanceToExistingCopperRegion,
   distanceToPrimitive,
   doesRectIntersectExistingCopperRegion,
-  isPointInsidePolygon,
   traceLoops,
 } from "./geometry"
 import type { LabeledLayer, LabeledProblem, PreparedProblem } from "./types"
 
-const BLOCKED_BY_CONFLICTING_EXISTING_COPPER = -2
+const BLOCKED_BY_EXISTING_COPPER = -2
 
 export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
   const { bounds, boardOutline, gridPitch } = problem
@@ -32,25 +35,17 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
         if (!isPointInsidePolygon({ x, y }, boardOutline)) continue
 
         const halfPitch = gridPitch / 2
-        const existingCopperNetIndexes = new Set(
-          existingCopperRegions
-            .filter((region) =>
-              doesRectIntersectExistingCopperRegion(
-                region,
-                x - halfPitch,
-                y - halfPitch,
-                x + halfPitch,
-                y + halfPitch,
-              ),
-            )
-            .map((region) => region.netIndex),
+        const overlapsExistingCopper = existingCopperRegions.some((region) =>
+          doesRectIntersectExistingCopperRegion(
+            region,
+            x - halfPitch,
+            y - halfPitch,
+            x + halfPitch,
+            y + halfPitch,
+          ),
         )
-        if (existingCopperNetIndexes.size === 1) {
-          labels[j * nx + i] = existingCopperNetIndexes.values().next().value!
-          continue
-        }
-        if (existingCopperNetIndexes.size > 1) {
-          labels[j * nx + i] = BLOCKED_BY_CONFLICTING_EXISTING_COPPER
+        if (overlapsExistingCopper) {
+          labels[j * nx + i] = BLOCKED_BY_EXISTING_COPPER
           continue
         }
 
@@ -120,75 +115,115 @@ const getConnectedRegions = (labeledLayer: LabeledLayer) => {
 const sanitizeIdPart = (value: string): string =>
   value.replace(/[^a-zA-Z0-9_]+/g, "_")
 
-const decomposeCellsIntoRectLoops = (
-  cells: number[],
-  nx: number,
-): Array<Array<[number, number]>> => {
-  const cellsByRow = new Map<number, number[]>()
-  for (const cell of cells) {
-    const i = cell % nx
-    const j = Math.floor(cell / nx)
-    const row = cellsByRow.get(j) ?? []
-    row.push(i)
-    cellsByRow.set(j, row)
-  }
+type GridPoint = [number, number]
 
-  type ActiveRect = {
-    startX: number
-    endX: number
-    startY: number
-    endY: number
-  }
-  const activeRects = new Map<string, ActiveRect>()
-  const completedRects: ActiveRect[] = []
-  const rows = Array.from(cellsByRow.keys()).sort((a, b) => a - b)
-  const minRow = rows[0]
-  const maxRow = rows.at(-1)
-  if (minRow === undefined || maxRow === undefined) return []
+const getSignedLoopArea = (loop: GridPoint[]): number =>
+  loop.reduce((area, point, index) => {
+    const next = loop[(index + 1) % loop.length]!
+    return area + point[0] * next[1] - next[0] * point[1]
+  }, 0) / 2
 
-  for (let j = minRow; j <= maxRow; j++) {
-    const columns = (cellsByRow.get(j) ?? []).sort((a, b) => a - b)
-    const runs: Array<{ startX: number; endX: number }> = []
-    for (const column of columns) {
-      const currentRun = runs.at(-1)
-      if (currentRun && column === currentRun.endX + 1) {
-        currentRun.endX = column
-      } else {
-        runs.push({ startX: column, endX: column })
-      }
-    }
-
-    const currentKeys = new Set<string>()
-    for (const run of runs) {
-      const key = `${run.startX}:${run.endX}`
-      currentKeys.add(key)
-      const active = activeRects.get(key)
-      if (active) {
-        active.endY = j + 1
-      } else {
-        activeRects.set(key, {
-          ...run,
-          startY: j,
-          endY: j + 1,
-        })
-      }
-    }
-
-    for (const [key, active] of activeRects) {
-      if (!currentKeys.has(key)) {
-        completedRects.push(active)
-        activeRects.delete(key)
-      }
+const getRightmostVertexIndex = (loop: GridPoint[]): number => {
+  let rightmostIndex = 0
+  for (let index = 1; index < loop.length; index++) {
+    const point = loop[index]!
+    const rightmost = loop[rightmostIndex]!
+    if (
+      point[0] > rightmost[0] ||
+      (point[0] === rightmost[0] && point[1] < rightmost[1])
+    ) {
+      rightmostIndex = index
     }
   }
-  completedRects.push(...activeRects.values())
+  return rightmostIndex
+}
 
-  return completedRects.map(({ startX, endX, startY, endY }) => [
-    [startX, startY],
-    [endX + 1, startY],
-    [endX + 1, endY],
-    [startX, endY],
-  ])
+const bridgeHoleIntoContour = (
+  contour: GridPoint[],
+  hole: GridPoint[],
+): GridPoint[] => {
+  const holeVertexIndex = getRightmostVertexIndex(hole)
+  const holeVertex = hole[holeVertexIndex]!
+  let bridgeEdgeIndex = -1
+  let bridgePoint: GridPoint | undefined
+  const rayEndX = Math.max(...contour.map(([x]) => x)) + 1
+
+  for (let edgeIndex = 0; edgeIndex < contour.length; edgeIndex++) {
+    const start = contour[edgeIndex]!
+    const end = contour[(edgeIndex + 1) % contour.length]!
+    const intersection = getSegmentIntersection(
+      { x: holeVertex[0], y: holeVertex[1] },
+      { x: rayEndX, y: holeVertex[1] },
+      { x: start[0], y: start[1] },
+      { x: end[0], y: end[1] },
+    )
+    if (!intersection) continue
+    if (!bridgePoint || intersection.x < bridgePoint[0]) {
+      bridgeEdgeIndex = edgeIndex
+      bridgePoint = [intersection.x, intersection.y]
+    }
+  }
+
+  if (!bridgePoint) {
+    throw new Error("Unable to connect a copper-pour cutout to its contour")
+  }
+
+  const holeFromBridge = Array.from(
+    { length: hole.length },
+    (_, offset) => hole[(holeVertexIndex + offset) % hole.length]!,
+  )
+  const contourAfterBridge: GridPoint[] = []
+  let contourIndex = (bridgeEdgeIndex + 1) % contour.length
+  while (true) {
+    const point = contour[contourIndex]!
+    if (point[0] !== bridgePoint[0] || point[1] !== bridgePoint[1]) {
+      contourAfterBridge.push(point)
+    }
+    if (contourIndex === bridgeEdgeIndex) break
+    contourIndex = (contourIndex + 1) % contour.length
+  }
+
+  // Circuit JSON polygon pours do not have inner rings. Walking to each hole,
+  // around it in the opposite direction, and back along the same zero-width
+  // bridge preserves one contour polygon while leaving the hole unfilled.
+  return [
+    bridgePoint,
+    ...holeFromBridge,
+    holeVertex,
+    bridgePoint,
+    ...contourAfterBridge,
+  ]
+}
+
+const combineTracedLoops = (loops: GridPoint[][]): GridPoint[][] => {
+  if (loops.length <= 1) return loops
+
+  const outerLoopIndex = loops.reduce(
+    (largestIndex, loop, index) =>
+      Math.abs(getSignedLoopArea(loop)) >
+      Math.abs(getSignedLoopArea(loops[largestIndex]!))
+        ? index
+        : largestIndex,
+    0,
+  )
+  let contour =
+    getSignedLoopArea(loops[outerLoopIndex]!) > 0
+      ? [...loops[outerLoopIndex]!]
+      : [...loops[outerLoopIndex]!].reverse()
+  const holes = loops
+    .filter((_, index) => index !== outerLoopIndex)
+    .map((loop) =>
+      getSignedLoopArea(loop) < 0 ? [...loop] : [...loop].reverse(),
+    )
+    .sort(
+      (a, b) =>
+        b[getRightmostVertexIndex(b)]![0] - a[getRightmostVertexIndex(a)]![0],
+    )
+
+  for (const hole of holes) {
+    contour = bridgeHoleIntoContour(contour, hole)
+  }
+  return [contour]
 }
 
 export const buildPowerPourPolygons = (
@@ -205,13 +240,9 @@ export const buildPowerPourPolygons = (
     for (const [regionIndex, region] of regions.entries()) {
       const net = problem.nets[region.netIndex]
       if (!net?.isPower || region.cells.length < minCells) continue
-      const tracedLoops = traceLoops(region.cells, labeledLayer.nx)
-      // Polygon pours cannot encode holes. Partition holed regions into
-      // rectangles so no emitted polygon fills a reserved copper island.
-      const loops =
-        tracedLoops.length > 1
-          ? decomposeCellsIntoRectLoops(region.cells, labeledLayer.nx)
-          : tracedLoops
+      const loops = combineTracedLoops(
+        traceLoops(region.cells, labeledLayer.nx),
+      )
 
       for (const [loopIndex, loop] of loops.entries()) {
         const points: Point[] = loop.map(([i, j]) => ({

@@ -22,7 +22,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.2.4",
     "@tscircuit/circuit-json-util": "^0.0.111",
-    "@tscircuit/math-utils": "^0.0.9",
+    "@tscircuit/math-utils": "^0.0.38",
     "@tscircuit/solver-utils": "^0.0.21",
     "@types/bun": "latest",
     "@types/react": "latest",
