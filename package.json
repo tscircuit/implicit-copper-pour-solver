@@ -19,16 +19,16 @@
     "url": "git+https://github.com/tscircuit/implicit-copper-pour-solver.git"
   },
   "license": "MIT",
-  "dependencies": {
-    "@tscircuit/solver-utils": "^0.0.21"
-  },
   "devDependencies": {
     "@biomejs/biome": "^2.2.4",
+    "@tscircuit/circuit-json-util": "^0.0.111",
+    "@tscircuit/solver-utils": "^0.0.21",
     "@types/bun": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "bun-match-svg": "^0.0.14",
     "circuit-json": "^0.0.472",
+    "circuit-json-to-connectivity-map": "^0.0.29",
     "graphics-debug": "^0.0.100",
     "react": "^19.1.1",
     "react-cosmos": "^7.4.0",
