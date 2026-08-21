@@ -68,12 +68,20 @@ export type CopperPrimitive =
       points: Point[]
     }
 
+export interface ExistingCopperRegion {
+  layer: LayerRef
+  netIndex: number
+  outerRing: Point[]
+  innerRings: Point[][]
+}
+
 export interface PreparedProblem {
   bounds: Bounds
   boardOutline: Point[]
   layers: LayerRef[]
   nets: PreparedNet[]
   primitives: CopperPrimitive[]
+  existingCopperRegions: ExistingCopperRegion[]
   gridPitch: number
   minRegionArea: number
   coveredWithSolderMask: boolean

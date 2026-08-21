@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { AnyCircuitElement } from "circuit-json"
 import { getSvgFromGraphicsObject } from "graphics-debug"
 import { ImplicitCopperPourPipelineSolver } from "../lib"
+import { isPointInsidePolygon } from "../lib/geometry"
 import { prepareCircuitJson } from "../lib/prepare-circuit-json"
 import { filterGraphicsByLayer } from "./fixtures/filter-graphics-by-layer"
 import { nrf52810Board } from "./fixtures/nrf52810-board"
@@ -221,7 +222,7 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     ).toMatchSvgSnapshot(import.meta.path, "nrf52810-bottom-layer-after-solve")
   })
 
-  test("includes every nRF52810 SMT pad but no existing copper pours", () => {
+  test("includes every SMT pad and reserves existing copper separately", () => {
     const prepared = prepareCircuitJson({ circuitJson: nrf52810Board })
     const withoutSmtPads = prepareCircuitJson({
       circuitJson: nrf52810Board.filter(
@@ -244,6 +245,8 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     expect(prepared.primitives.length).toBe(
       withoutCopperPours.primitives.length,
     )
+    expect(prepared.existingCopperRegions).toHaveLength(6)
+    expect(withoutCopperPours.existingCopperRegions).toHaveLength(0)
   })
 
   test("includes unconnected plated holes as non-power obstacles", () => {
@@ -268,20 +271,6 @@ describe("ImplicitCopperPourPipelineSolver", () => {
         hole_diameter: 0.5,
         layers: ["top", "bottom"],
       },
-      {
-        type: "pcb_copper_pour",
-        pcb_copper_pour_id: "pcb_copper_pour_existing",
-        shape: "polygon",
-        layer: "top",
-        source_net_id: "source_net_existing",
-        covered_with_solder_mask: true,
-        points: [
-          { x: -2, y: -2 },
-          { x: 2, y: -2 },
-          { x: 2, y: 2 },
-          { x: -2, y: 2 },
-        ],
-      },
     ] as AnyCircuitElement[]
 
     const prepared = prepareCircuitJson({ circuitJson })
@@ -290,6 +279,147 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     expect(prepared.primitives[0]?.kind).toBe("circle")
     expect(prepared.nets).toHaveLength(1)
     expect(prepared.nets[0]?.isPower).toBe(false)
+  })
+
+  test("does not overlap existing copper pours on their layer", () => {
+    const existingPours = [
+      {
+        type: "pcb_copper_pour",
+        pcb_copper_pour_id: "existing_rect",
+        shape: "rect",
+        layer: "top",
+        source_net_id: "source_net_gnd",
+        covered_with_solder_mask: true,
+        center: { x: 3, y: 0 },
+        width: 2,
+        height: 2,
+      },
+      {
+        type: "pcb_copper_pour",
+        pcb_copper_pour_id: "existing_polygon",
+        shape: "polygon",
+        layer: "top",
+        source_net_id: "source_net_gnd",
+        covered_with_solder_mask: true,
+        points: [
+          { x: 2, y: -1 },
+          { x: 4, y: -1 },
+          { x: 4, y: 1 },
+          { x: 2, y: 1 },
+        ],
+      },
+      {
+        type: "pcb_copper_pour",
+        pcb_copper_pour_id: "existing_brep",
+        shape: "brep",
+        layer: "top",
+        source_net_id: "source_net_gnd",
+        covered_with_solder_mask: true,
+        brep_shape: {
+          outer_ring: {
+            vertices: [
+              { x: 2, y: -1 },
+              { x: 4, y: -1 },
+              { x: 4, y: 1 },
+              { x: 2, y: 1 },
+            ],
+          },
+          inner_rings: [],
+        },
+      },
+    ] as AnyCircuitElement[]
+
+    for (const existingPour of existingPours) {
+      const circuitJson = [
+        {
+          type: "pcb_board",
+          pcb_board_id: "existing_pour_board",
+          center: { x: 0, y: 0 },
+          width: 10,
+          height: 6,
+          thickness: 1.4,
+          num_layers: 2,
+          material: "fr4",
+        },
+        {
+          type: "source_net",
+          source_net_id: "source_net_gnd",
+          name: "GND",
+          member_source_group_ids: [],
+          is_ground: true,
+        },
+        {
+          type: "source_net",
+          source_net_id: "source_net_vbat",
+          name: "VBAT",
+          member_source_group_ids: [],
+          is_power: true,
+        },
+        {
+          type: "pcb_via",
+          pcb_via_id: "pcb_via_gnd",
+          x: -3,
+          y: 0,
+          outer_diameter: 0.6,
+          hole_diameter: 0.3,
+          layers: ["top", "bottom"],
+          source_net_id: "source_net_gnd",
+        },
+        {
+          type: "pcb_via",
+          pcb_via_id: "pcb_via_vbat",
+          x: 3,
+          y: 0,
+          outer_diameter: 0.6,
+          hole_diameter: 0.3,
+          layers: ["top", "bottom"],
+          source_net_id: "source_net_vbat",
+        },
+        existingPour,
+      ] as AnyCircuitElement[]
+      const solver = new ImplicitCopperPourPipelineSolver({
+        circuitJson,
+        gridPitch: 0.25,
+        minRegionArea: 0,
+      })
+
+      solver.solve()
+
+      const pointsInsideExistingPour = Array.from({ length: 7 }, (_, xIndex) =>
+        Array.from({ length: 7 }, (_, yIndex) => ({
+          x: 2.125 + xIndex * 0.25,
+          y: -0.875 + yIndex * 0.25,
+        })),
+      ).flat()
+      const pourCenter = { x: 3, y: 0 }
+      const output = solver.getOutput()
+      const topPours = output.filter(
+        (pour) => pour.layer === "top" && pour.shape === "polygon",
+      )
+      const bottomVbatPours = output.filter(
+        (pour) =>
+          pour.layer === "bottom" &&
+          pour.source_net_id === "source_net_vbat" &&
+          pour.shape === "polygon",
+      )
+
+      expect(
+        pointsInsideExistingPour.every((point) =>
+          topPours.every(
+            (pour) =>
+              pour.shape !== "polygon" ||
+              !isPointInsidePolygon(point, pour.points),
+          ),
+        ),
+      ).toBe(true)
+      expect(
+        bottomVbatPours.some(
+          (pour) =>
+            pour.shape === "polygon" &&
+            isPointInsidePolygon(pourCenter, pour.points),
+        ),
+      ).toBe(true)
+    }
   })
 
   test("resolves routed copper through Circuit JSON connectivity", () => {

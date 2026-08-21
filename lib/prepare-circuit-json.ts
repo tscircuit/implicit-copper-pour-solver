@@ -2,11 +2,13 @@ import type {
   AnyCircuitElement,
   LayerRef,
   PcbBoard,
+  PcbCopperPour,
   PcbPlatedHole,
   PcbSmtPad,
   PcbTrace,
   PcbVia,
   Point,
+  PointWithBulge,
   SourceNet,
 } from "circuit-json"
 import { getElementId } from "@tscircuit/circuit-json-util"
@@ -17,6 +19,7 @@ import {
 } from "circuit-json-to-connectivity-map"
 import type {
   CopperPrimitive,
+  ExistingCopperRegion,
   ImplicitCopperPourSolverInput,
   PreparedNet,
   PreparedProblem,
@@ -204,6 +207,102 @@ const addTrace = (
       })
     }
     previousWire = routePoint
+  }
+}
+
+const linearizeRing = (ring: PointWithBulge[]): Point[] => {
+  const vertices = [...ring]
+  const first = vertices[0]
+  const last = vertices.at(-1)
+  if (
+    vertices.length > 1 &&
+    first &&
+    last &&
+    first.x === last.x &&
+    first.y === last.y
+  ) {
+    vertices.pop()
+  }
+
+  const points: Point[] = []
+  for (let index = 0; index < vertices.length; index++) {
+    const start = vertices[index]!
+    const end = vertices[(index + 1) % vertices.length]!
+    points.push({ x: start.x, y: start.y })
+
+    const bulge = start.bulge ?? 0
+    const chordLength = Math.hypot(end.x - start.x, end.y - start.y)
+    if (Math.abs(bulge) < 1e-9 || chordLength < 1e-9) continue
+
+    const sweepAngle = 4 * Math.atan(bulge)
+    const midpoint = {
+      x: (start.x + end.x) / 2,
+      y: (start.y + end.y) / 2,
+    }
+    const leftNormal = {
+      x: -(end.y - start.y) / chordLength,
+      y: (end.x - start.x) / chordLength,
+    }
+    const centerOffset = (chordLength * (1 - bulge ** 2)) / (4 * bulge)
+    const center = {
+      x: midpoint.x + leftNormal.x * centerOffset,
+      y: midpoint.y + leftNormal.y * centerOffset,
+    }
+    const radius = Math.hypot(start.x - center.x, start.y - center.y)
+    const startAngle = Math.atan2(start.y - center.y, start.x - center.x)
+    const segmentCount = Math.max(
+      2,
+      Math.ceil(Math.abs(sweepAngle) / (Math.PI / 18)),
+    )
+    for (let segmentIndex = 1; segmentIndex < segmentCount; segmentIndex++) {
+      const angle = startAngle + (sweepAngle * segmentIndex) / segmentCount
+      points.push({
+        x: center.x + Math.cos(angle) * radius,
+        y: center.y + Math.sin(angle) * radius,
+      })
+    }
+  }
+  return points
+}
+
+const getExistingCopperRegion = (
+  pour: PcbCopperPour,
+  netIndex: number,
+): ExistingCopperRegion | undefined => {
+  if (pour.shape === "rect") {
+    const angle = ((pour.rotation ?? 0) * Math.PI) / 180
+    const halfWidth = pour.width / 2
+    const halfHeight = pour.height / 2
+    const outerRing = [
+      { x: -halfWidth, y: -halfHeight },
+      { x: halfWidth, y: -halfHeight },
+      { x: halfWidth, y: halfHeight },
+      { x: -halfWidth, y: halfHeight },
+    ].map((point) => ({
+      x: pour.center.x + point.x * Math.cos(angle) - point.y * Math.sin(angle),
+      y: pour.center.y + point.x * Math.sin(angle) + point.y * Math.cos(angle),
+    }))
+    return { layer: pour.layer, netIndex, outerRing, innerRings: [] }
+  }
+
+  if (pour.shape === "polygon") {
+    return {
+      layer: pour.layer,
+      netIndex,
+      outerRing: pour.points,
+      innerRings: [],
+    }
+  }
+
+  const outerRing = linearizeRing(pour.brep_shape.outer_ring.vertices)
+  if (outerRing.length < 3) return undefined
+  return {
+    layer: pour.layer,
+    netIndex,
+    outerRing,
+    innerRings: pour.brep_shape.inner_rings
+      .map((ring) => linearizeRing(ring.vertices))
+      .filter((ring) => ring.length >= 3),
   }
 }
 
@@ -449,6 +548,15 @@ export const prepareCircuitJson = (
   }
 
   const primitives: CopperPrimitive[] = []
+  const existingCopperRegions: ExistingCopperRegion[] = []
+  for (const element of input.circuitJson) {
+    if (element.type !== "pcb_copper_pour") continue
+    const netIndex = getNetIndex(element)
+    if (netIndex === undefined) continue
+    const region = getExistingCopperRegion(element, netIndex)
+    if (region) existingCopperRegions.push(region)
+  }
+
   for (const element of input.circuitJson) {
     if (
       element.type !== "pcb_smtpad" &&
@@ -485,6 +593,7 @@ export const prepareCircuitJson = (
     layers: input.layers ?? ["top", "bottom"],
     nets,
     primitives,
+    existingCopperRegions,
     gridPitch,
     minRegionArea,
     coveredWithSolderMask: input.coveredWithSolderMask ?? true,

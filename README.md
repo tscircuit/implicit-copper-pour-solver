@@ -7,11 +7,15 @@ The solver follows the power-trace-expansion algorithm from the supplied
 [JSX artifact](https://claude.ai/public/artifacts/e5ef6abf-7d47-478f-b76a-3d0d1ff3d55d):
 
 1. Sample a regular grid on each selected copper layer.
-2. Assign every in-board sample to its nearest net-owned pad, trace, or via.
-3. Group four-connected cells with the same nearest net.
-4. Discard regions below the configured minimum area.
-5. Trace each surviving grid region into a rectilinear polygon.
-6. Emit polygons only when the owning `source_net` has `is_power`, `is_ground`,
+2. Reserve cells touched by existing rectangular, polygon, or BRep
+   `pcb_copper_pour` elements on their declared layer.
+3. Assign every remaining in-board sample to its nearest net-owned pad, trace,
+   via, or existing copper region.
+4. Group four-connected cells with the same nearest net.
+5. Discard regions below the configured minimum area.
+6. Trace each surviving grid region into one or more non-overlapping
+   rectilinear polygons.
+7. Emit polygons only when the owning `source_net` has `is_power`, `is_ground`,
    or `is_positive_voltage_source` set.
 
 ## Usage

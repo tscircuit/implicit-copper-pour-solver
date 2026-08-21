@@ -1,5 +1,5 @@
 import type { Point } from "circuit-json"
-import type { CopperPrimitive } from "./types"
+import type { CopperPrimitive, ExistingCopperRegion } from "./types"
 
 const distanceToSegment = (
   px: number,
@@ -34,8 +34,7 @@ export const isPointInsidePolygon = (
   return inside
 }
 
-const distanceToPolygon = (point: Point, polygon: Point[]): number => {
-  if (isPointInsidePolygon(point, polygon)) return 0
+const distanceToPolygonBoundary = (point: Point, polygon: Point[]): number => {
   let best = Number.POSITIVE_INFINITY
   for (let index = 0; index < polygon.length; index++) {
     const start = polygon[index]!
@@ -46,6 +45,146 @@ const distanceToPolygon = (point: Point, polygon: Point[]): number => {
     )
   }
   return best
+}
+
+export const distanceToPolygon = (point: Point, polygon: Point[]): number => {
+  if (isPointInsidePolygon(point, polygon)) return 0
+  return distanceToPolygonBoundary(point, polygon)
+}
+
+export const distanceToExistingCopperRegion = (
+  point: Point,
+  region: ExistingCopperRegion,
+): number => {
+  if (!isPointInsidePolygon(point, region.outerRing)) {
+    return distanceToPolygonBoundary(point, region.outerRing)
+  }
+
+  const containingHole = region.innerRings.find((ring) =>
+    isPointInsidePolygon(point, ring),
+  )
+  return containingHole ? distanceToPolygonBoundary(point, containingHole) : 0
+}
+
+const crossProduct = (a: Point, b: Point, c: Point): number =>
+  (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+
+const isPointOnSegment = (point: Point, start: Point, end: Point): boolean => {
+  const epsilon = 1e-9
+  return (
+    Math.abs(crossProduct(start, end, point)) <= epsilon &&
+    point.x >= Math.min(start.x, end.x) - epsilon &&
+    point.x <= Math.max(start.x, end.x) + epsilon &&
+    point.y >= Math.min(start.y, end.y) - epsilon &&
+    point.y <= Math.max(start.y, end.y) + epsilon
+  )
+}
+
+const segmentsIntersect = (
+  firstStart: Point,
+  firstEnd: Point,
+  secondStart: Point,
+  secondEnd: Point,
+): boolean => {
+  const firstCrossStart = crossProduct(firstStart, firstEnd, secondStart)
+  const firstCrossEnd = crossProduct(firstStart, firstEnd, secondEnd)
+  const secondCrossStart = crossProduct(secondStart, secondEnd, firstStart)
+  const secondCrossEnd = crossProduct(secondStart, secondEnd, firstEnd)
+
+  if (
+    ((firstCrossStart > 0 && firstCrossEnd < 0) ||
+      (firstCrossStart < 0 && firstCrossEnd > 0)) &&
+    ((secondCrossStart > 0 && secondCrossEnd < 0) ||
+      (secondCrossStart < 0 && secondCrossEnd > 0))
+  ) {
+    return true
+  }
+
+  return (
+    isPointOnSegment(secondStart, firstStart, firstEnd) ||
+    isPointOnSegment(secondEnd, firstStart, firstEnd) ||
+    isPointOnSegment(firstStart, secondStart, secondEnd) ||
+    isPointOnSegment(firstEnd, secondStart, secondEnd)
+  )
+}
+
+const getRectCorners = (
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): Point[] => [
+  { x: minX, y: minY },
+  { x: maxX, y: minY },
+  { x: maxX, y: maxY },
+  { x: minX, y: maxY },
+]
+
+const isPointInsideRect = (
+  point: Point,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): boolean =>
+  point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY
+
+const doesPolygonBoundaryIntersectRect = (
+  polygon: Point[],
+  rectCorners: Point[],
+): boolean => {
+  for (let polygonIndex = 0; polygonIndex < polygon.length; polygonIndex++) {
+    const polygonStart = polygon[polygonIndex]!
+    const polygonEnd = polygon[(polygonIndex + 1) % polygon.length]!
+    for (let rectIndex = 0; rectIndex < rectCorners.length; rectIndex++) {
+      if (
+        segmentsIntersect(
+          polygonStart,
+          polygonEnd,
+          rectCorners[rectIndex]!,
+          rectCorners[(rectIndex + 1) % rectCorners.length]!,
+        )
+      ) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+const doesPolygonIntersectRect = (
+  polygon: Point[],
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): boolean => {
+  const rectCorners = getRectCorners(minX, minY, maxX, maxY)
+  return (
+    rectCorners.some((corner) => isPointInsidePolygon(corner, polygon)) ||
+    polygon.some((point) => isPointInsideRect(point, minX, minY, maxX, maxY)) ||
+    doesPolygonBoundaryIntersectRect(polygon, rectCorners)
+  )
+}
+
+export const doesRectIntersectExistingCopperRegion = (
+  region: ExistingCopperRegion,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): boolean => {
+  if (!doesPolygonIntersectRect(region.outerRing, minX, minY, maxX, maxY)) {
+    return false
+  }
+
+  const rectCorners = getRectCorners(minX, minY, maxX, maxY)
+  const containingHole = region.innerRings.find(
+    (ring) =>
+      rectCorners.every((corner) => isPointInsidePolygon(corner, ring)) &&
+      !doesPolygonBoundaryIntersectRect(ring, rectCorners),
+  )
+  return containingHole === undefined
 }
 
 export const distanceToPrimitive = (
