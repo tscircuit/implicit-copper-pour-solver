@@ -11,7 +11,7 @@ import {
   getLayerColor,
 } from "./grid-solver"
 import { prepareCircuitJson } from "./prepare-circuit-json"
-import { simplifyPolygonEdges } from "./simplify-polygon-edges"
+import { simplifyPolygonSetEdges } from "./simplify-polygon-edges"
 import type {
   ImplicitCopperPourSolverInput,
   ImplicitCopperPourSolverOutput,
@@ -121,13 +121,35 @@ class SimplifyPolygonEdgesSolver extends BaseSolver {
   override _step() {
     let inputPoints = 0
     let outputPoints = 0
-    this.output = this.input.pours.map((pour) => {
-      if (pour.shape !== "polygon") return pour
+    const output = [...this.input.pours]
+    const polygonIndicesByLayer = new Map<string, number[]>()
+
+    for (const [pourIndex, pour] of this.input.pours.entries()) {
+      if (pour.shape !== "polygon") continue
       inputPoints += pour.points.length
-      const points = simplifyPolygonEdges(pour.points, this.input.tolerance)
-      outputPoints += points.length
-      return { ...pour, points }
-    })
+      const indices = polygonIndicesByLayer.get(pour.layer) ?? []
+      indices.push(pourIndex)
+      polygonIndicesByLayer.set(pour.layer, indices)
+    }
+
+    for (const polygonIndices of polygonIndicesByLayer.values()) {
+      const simplifiedPolygons = simplifyPolygonSetEdges(
+        polygonIndices.map((pourIndex) => {
+          const pour = this.input.pours[pourIndex]!
+          if (pour.shape !== "polygon") return []
+          return pour.points
+        }),
+        this.input.tolerance,
+      )
+      for (const [layerPolygonIndex, points] of simplifiedPolygons.entries()) {
+        const pourIndex = polygonIndices[layerPolygonIndex]!
+        const pour = this.input.pours[pourIndex]!
+        if (pour.shape !== "polygon") continue
+        output[pourIndex] = { ...pour, points }
+        outputPoints += points.length
+      }
+    }
+    this.output = output
     this.stats = {
       polygons: this.output.length,
       inputPoints,

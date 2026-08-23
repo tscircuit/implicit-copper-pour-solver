@@ -37,7 +37,9 @@ The class extends `BasePipelineSolver` from `@tscircuit/solver-utils` and uses
 four debugger-visible stages: Circuit JSON preparation, nearest-net grid
 assignment, power polygon tracing, and edge simplification. The simplification
 tolerance defaults to `gridPitch`; set `edgeSimplificationTolerance` to `0` to
-keep the traced grid edges unchanged.
+keep the traced grid edges unchanged. Shared boundaries are simplified as a
+single topological arc and reused by both regions, preventing smoothing from
+creating overlaps or gaps between adjacent pours.
 
 ## Development
 
