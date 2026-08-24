@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import type { AnyCircuitElement } from "circuit-json"
 import { getSvgFromGraphicsObject } from "graphics-debug"
-import { ImplicitCopperPourPipelineSolver } from "../lib"
+import {
+  ImplicitCopperPourPipelineSolver,
+  type ImplicitCopperPourSolverOutput,
+} from "../lib"
 import { prepareCircuitJson } from "../lib/prepare-circuit-json"
 import { filterGraphicsByLayer } from "./fixtures/filter-graphics-by-layer"
 import { nrf52810Board } from "./fixtures/nrf52810-board"
@@ -19,6 +22,7 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     const output = solver.getOutput()
 
     expect(solver.solved).toBe(true)
+    expect(solver.hasStageOutput("simplifyPolygonEdges")).toBe(true)
     expect(output.length).toBe(2)
     expect(output.every((pour) => pour.shape === "polygon")).toBe(true)
     expect(
@@ -180,7 +184,20 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     solver.solve()
 
     const output = solver.getOutput()
+    const tracedOutput =
+      solver.getStageOutput<ImplicitCopperPourSolverOutput>(
+        "tracePowerPolygons",
+      )!
+    const tracedPointCount = tracedOutput.reduce(
+      (sum, pour) => sum + (pour.shape === "polygon" ? pour.points.length : 0),
+      0,
+    )
+    const outputPointCount = output.reduce(
+      (sum, pour) => sum + (pour.shape === "polygon" ? pour.points.length : 0),
+      0,
+    )
     expect(output.length).toBeGreaterThan(0)
+    expect(outputPointCount).toBeLessThan(tracedPointCount)
     expect(
       output.every((pour) =>
         ["source_net_0", "source_net_1"].includes(pour.source_net_id ?? ""),
@@ -348,5 +365,16 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     })
 
     expect(() => solver.solve()).toThrow("gridPitch must be greater than zero")
+  })
+
+  test("rejects invalid edge simplification tolerances", () => {
+    const solver = new ImplicitCopperPourPipelineSolver({
+      circuitJson: simplePowerBoard,
+      edgeSimplificationTolerance: -1,
+    })
+
+    expect(() => solver.solve()).toThrow(
+      "edgeSimplificationTolerance must be zero or greater",
+    )
   })
 })
