@@ -23,7 +23,7 @@ import type {
 } from "./types"
 
 const DEFAULT_GRID_PITCH = 0.25
-const DEFAULT_MIN_REGION_AREA = 2
+const DEFAULT_MIN_REGION_AREA = 0
 
 const getBoardOutline = (board: PcbBoard): Point[] => {
   if (board.outline && board.outline.length >= 3) return board.outline

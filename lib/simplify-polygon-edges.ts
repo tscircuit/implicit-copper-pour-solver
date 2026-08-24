@@ -199,6 +199,46 @@ const normalizePolygon = (polygon: Point[]): Point[] => {
   return points
 }
 
+const isPointStrictlyInsideSegment = (
+  point: Point,
+  start: Point,
+  end: Point,
+): boolean => {
+  if (pointsEqual(point, start) || pointsEqual(point, end)) return false
+  const cross = crossProduct(start, end, point)
+  if (Math.abs(cross) > 1e-9) return false
+  return isPointOnSegment(point, start, end)
+}
+
+const splitEdgesAtVertices = (
+  polygon: Point[],
+  allVertices: Point[],
+): Point[] => {
+  const result: Point[] = []
+  for (let index = 0; index < polygon.length; index++) {
+    const start = polygon[index]!
+    const end = polygon[(index + 1) % polygon.length]!
+    const dx = end.x - start.x
+    const dy = end.y - start.y
+    const verticesOnEdge = allVertices
+      .filter((point) => isPointStrictlyInsideSegment(point, start, end))
+      .map((point) => ({
+        point,
+        position:
+          Math.abs(dx) >= Math.abs(dy)
+            ? (point.x - start.x) / dx
+            : (point.y - start.y) / dy,
+      }))
+      .sort((a, b) => a.position - b.position)
+
+    result.push(start)
+    for (const { point } of verticesOnEdge) {
+      if (!pointsEqual(result[result.length - 1]!, point)) result.push(point)
+    }
+  }
+  return result
+}
+
 const isValidSimplification = (
   original: Point[],
   simplified: Point[],
@@ -378,7 +418,11 @@ export const simplifyPolygonSetEdges = (
   polygons: Point[][],
   tolerance: number,
 ): Point[][] => {
-  const normalizedPolygons = polygons.map(normalizePolygon)
+  const initiallyNormalizedPolygons = polygons.map(normalizePolygon)
+  const allVertices = initiallyNormalizedPolygons.flat()
+  const normalizedPolygons = initiallyNormalizedPolygons.map((polygon) =>
+    splitEdgesAtVertices(polygon, allVertices),
+  )
   if (tolerance <= 0 || normalizedPolygons.length === 0) {
     return normalizedPolygons
   }
