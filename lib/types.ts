@@ -15,7 +15,10 @@ export interface ImplicitCopperPourSolverInput {
    * Defaults to gridPitch. Set to zero to disable edge simplification.
    */
   edgeSimplificationTolerance?: number
-  /** Four-connected regions smaller than this area are discarded. */
+  /**
+   * Four-connected regions smaller than this area are discarded. Defaults to
+   * zero so the board remains completely partitioned between power nets.
+   */
   minRegionArea?: number
   /** Copper layers to solve. Defaults to top and bottom. */
   layers?: LayerRef[]
@@ -23,6 +26,7 @@ export interface ImplicitCopperPourSolverInput {
   coveredWithSolderMask?: boolean
 }
 
+/** Coarse region outlines; these are not final manufacturable copper geometry. */
 export type ImplicitCopperPourSolverOutput = PcbCopperPour[]
 
 export interface Bounds {

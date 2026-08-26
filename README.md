@@ -1,19 +1,23 @@
 # @tscircuit/implicit-copper-pour-solver
 
-Generate implicit `pcb_copper_pour` polygon elements for power nets in Circuit
-JSON.
+Generate coarse implicit `pcb_copper_pour` region elements for power nets in
+Circuit JSON. The emitted polygons are inputs to the downstream copper-pour
+solver, which computes the final manufacturable copper geometry and clearances.
 
 The solver follows the power-trace-expansion algorithm from the supplied
 [JSX artifact](https://claude.ai/public/artifacts/e5ef6abf-7d47-478f-b76a-3d0d1ff3d55d):
 
 1. Sample a regular grid on each selected copper layer.
-2. Assign every in-board sample to its nearest net-owned pad, trace, or via.
+2. Assign every in-board sample to its nearest power-net-owned pad, trace, or
+   via. Copper belonging to signal and other non-power nets is deliberately not
+   treated as an obstacle at this phase.
 3. Group four-connected cells with the same nearest net.
-4. Discard regions below the configured minimum area.
-5. Trace each surviving grid region into a rectilinear polygon.
+4. Optionally discard regions below an explicitly configured minimum area.
+5. Trace each surviving grid region into one or more non-overlapping polygons.
 6. Simplify the traced edges to smooth grid-generated stair steps.
-7. Emit polygons only when the owning `source_net` has `is_power`, `is_ground`,
-   or `is_positive_voltage_source` set.
+7. Emit coarse region polygons for `source_net` elements with `is_power`,
+   `is_ground`, or `is_positive_voltage_source` set. Except for the board
+   outline, exact copper exclusions are deferred to the downstream solver.
 
 ## Usage
 
@@ -24,13 +28,12 @@ const solver = new ImplicitCopperPourPipelineSolver({
   circuitJson,
   gridPitch: 0.25,
   edgeSimplificationTolerance: 0.25,
-  minRegionArea: 2,
   layers: ["top", "bottom"],
 })
 
 solver.solve()
-const copperPourElements = solver.getOutput()
-const circuitJsonWithPours = [...circuitJson, ...copperPourElements]
+const implicitRegions = solver.getOutput()
+// Feed each region's points to the downstream copper-pour solver as its outline.
 ```
 
 The class extends `BasePipelineSolver` from `@tscircuit/solver-utils` and uses
@@ -40,6 +43,9 @@ tolerance defaults to `gridPitch`; set `edgeSimplificationTolerance` to `0` to
 keep the traced grid edges unchanged. Shared boundaries are simplified as a
 single topological arc and reused by both regions, preventing smoothing from
 creating overlaps or gaps between adjacent pours.
+`minRegionArea` defaults to zero so eligible power nets partition the complete
+board area. Setting it above zero deliberately allows small regions to be
+omitted.
 
 ## Development
 

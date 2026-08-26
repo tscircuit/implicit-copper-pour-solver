@@ -13,8 +13,10 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
   const labeledLayers: LabeledLayer[] = []
 
   for (const layer of problem.layers) {
-    const primitives = problem.primitives.filter((primitive) =>
-      primitive.layers.includes(layer),
+    const powerPrimitives = problem.primitives.filter(
+      (primitive) =>
+        primitive.layers.includes(layer) &&
+        problem.nets[primitive.netIndex]?.isPower,
     )
     const labels = new Int32Array(nx * ny).fill(-1)
 
@@ -26,7 +28,7 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
 
         let bestDistance = Number.POSITIVE_INFINITY
         let bestNetIndex = -1
-        for (const primitive of primitives) {
+        for (const primitive of powerPrimitives) {
           const distance = distanceToPrimitive(primitive, x, y)
           if (distance < bestDistance) {
             bestDistance = distance
@@ -80,6 +82,95 @@ const getConnectedRegions = (labeledLayer: LabeledLayer) => {
   return regions
 }
 
+const getConnectedCellGroups = (cells: number[], nx: number): number[][] => {
+  const remaining = new Set(cells)
+  const groups: number[][] = []
+  const stack: number[] = []
+
+  while (remaining.size > 0) {
+    const start = remaining.values().next().value!
+    const group: number[] = []
+    remaining.delete(start)
+    stack.push(start)
+
+    while (stack.length > 0) {
+      const cell = stack.pop()!
+      group.push(cell)
+      const i = cell % nx
+      const neighbors = [cell - nx, cell + nx]
+      if (i > 0) neighbors.push(cell - 1)
+      if (i < nx - 1) neighbors.push(cell + 1)
+
+      for (const neighbor of neighbors) {
+        if (!remaining.has(neighbor)) continue
+        remaining.delete(neighbor)
+        stack.push(neighbor)
+      }
+    }
+    groups.push(group)
+  }
+
+  return groups
+}
+
+const getAbsoluteGridLoopArea = (loop: Array<[number, number]>): number =>
+  Math.abs(
+    loop.reduce((area, point, index) => {
+      const next = loop[(index + 1) % loop.length]!
+      return area + point[0] * next[1] - next[0] * point[1]
+    }, 0) / 2,
+  )
+
+/**
+ * A Circuit JSON polygon has one ring, so a connected cell region containing a
+ * hole cannot be emitted directly. Cut such regions horizontally through one
+ * hole at a time and trace the resulting simply-connected pieces instead.
+ * Together the pieces contain exactly the original cells without overlap.
+ */
+const splitRegionIntoHoleFreeCellGroups = (
+  cells: number[],
+  nx: number,
+): number[][] => {
+  const pending = [cells]
+  const output: number[][] = []
+
+  while (pending.length > 0) {
+    const group = pending.pop()!
+    const loops = traceLoops(group, nx)
+    if (loops.length <= 1) {
+      output.push(group)
+      continue
+    }
+
+    const outerLoopIndex = loops.reduce(
+      (largestIndex, loop, index) =>
+        getAbsoluteGridLoopArea(loop) >
+        getAbsoluteGridLoopArea(loops[largestIndex]!)
+          ? index
+          : largestIndex,
+      0,
+    )
+    const hole = loops.find((_, index) => index !== outerLoopIndex)!
+    const holeYs = hole.map((point) => point[1])
+    const cutY = Math.round((Math.min(...holeYs) + Math.max(...holeYs)) / 2)
+    const belowCut = group.filter((cell) => Math.floor(cell / nx) < cutY)
+    const aboveCut = group.filter((cell) => Math.floor(cell / nx) >= cutY)
+    const splitGroups = [belowCut, aboveCut]
+      .filter((part) => part.length > 0)
+      .flatMap((part) => getConnectedCellGroups(part, nx))
+
+    if (
+      splitGroups.length < 2 ||
+      splitGroups.some((part) => part.length === group.length)
+    ) {
+      throw new Error("Unable to split an implicit copper region around a hole")
+    }
+    pending.push(...splitGroups)
+  }
+
+  return output
+}
+
 const sanitizeIdPart = (value: string): string =>
   value.replace(/[^a-zA-Z0-9_]+/g, "_")
 
@@ -97,9 +188,17 @@ export const buildPowerPourPolygons = (
     for (const [regionIndex, region] of regions.entries()) {
       const net = problem.nets[region.netIndex]
       if (!net?.isPower || region.cells.length < minCells) continue
-      const loops = traceLoops(region.cells, labeledLayer.nx)
+      const regionParts = splitRegionIntoHoleFreeCellGroups(
+        region.cells,
+        labeledLayer.nx,
+      )
 
-      for (const [loopIndex, loop] of loops.entries()) {
+      for (const [partIndex, cells] of regionParts.entries()) {
+        const loops = traceLoops(cells, labeledLayer.nx)
+        if (loops.length !== 1) {
+          throw new Error("Implicit copper region part must have one outline")
+        }
+        const loop = loops[0]!
         const points: Point[] = loop.map(([i, j]) => ({
           x: Math.min(
             problem.bounds.maxX,
@@ -112,7 +211,7 @@ export const buildPowerPourPolygons = (
         }))
         output.push({
           type: "pcb_copper_pour",
-          pcb_copper_pour_id: `pcb_copper_pour_${sanitizeIdPart(labeledLayer.layer)}_${sanitizeIdPart(net.sourceNet.source_net_id)}_${regionIndex}_${loopIndex}`,
+          pcb_copper_pour_id: `pcb_copper_pour_${sanitizeIdPart(labeledLayer.layer)}_${sanitizeIdPart(net.sourceNet.source_net_id)}_${regionIndex}_${partIndex}`,
           shape: "polygon",
           layer: labeledLayer.layer,
           source_net_id: net.sourceNet.source_net_id,

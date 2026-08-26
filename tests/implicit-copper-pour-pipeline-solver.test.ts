@@ -6,12 +6,25 @@ import {
   type ImplicitCopperPourSolverOutput,
 } from "../lib"
 import { prepareCircuitJson } from "../lib/prepare-circuit-json"
+import type { LabeledProblem } from "../lib/types"
 import { filterGraphicsByLayer } from "./fixtures/filter-graphics-by-layer"
 import { nrf52810Board } from "./fixtures/nrf52810-board"
 import { simplePowerBoard } from "./fixtures/simple-power-board"
 
+const getAbsolutePolygonArea = (
+  pour: ImplicitCopperPourSolverOutput[number],
+): number => {
+  if (pour.shape !== "polygon") return 0
+  return Math.abs(
+    pour.points.reduce((area, point, index) => {
+      const next = pour.points[(index + 1) % pour.points.length]!
+      return area + point.x * next.y - next.x * point.y
+    }, 0) / 2,
+  )
+}
+
 describe("ImplicitCopperPourPipelineSolver", () => {
-  test("emits polygon pours only for power nets", () => {
+  test("fills each layer with implicit regions owned only by power nets", () => {
     const solver = new ImplicitCopperPourPipelineSolver({
       circuitJson: simplePowerBoard,
       gridPitch: 1,
@@ -36,6 +49,183 @@ describe("ImplicitCopperPourPipelineSolver", () => {
         (pour) => pour.shape === "polygon" && pour.points.length >= 4,
       ),
     ).toBe(true)
+    expect(
+      output.every((pour) => getAbsolutePolygonArea(pour) === 10 * 6),
+    ).toBe(true)
+
+    const labeledProblem =
+      solver.getStageOutput<LabeledProblem>("assignGridCells")!
+    const groundNetIndex = labeledProblem.nets.findIndex(
+      (net) => net.sourceNet.source_net_id === "source_net_gnd",
+    )
+    expect(
+      labeledProblem.labeledLayers.every((labeledLayer) =>
+        labeledLayer.labels.every(
+          (netIndex) => netIndex < 0 || netIndex === groundNetIndex,
+        ),
+      ),
+    ).toBe(true)
+  })
+
+  test("partitions the complete layer between power nets across signal copper", () => {
+    const circuitJson = [
+      {
+        type: "pcb_board",
+        pcb_board_id: "board",
+        center: { x: 0, y: 0 },
+        width: 8,
+        height: 4,
+        thickness: 1.4,
+        num_layers: 2,
+        material: "fr4",
+      },
+      {
+        type: "source_net",
+        source_net_id: "ground",
+        name: "GND",
+        member_source_group_ids: [],
+        is_ground: true,
+      },
+      {
+        type: "source_net",
+        source_net_id: "power",
+        name: "VCC",
+        member_source_group_ids: [],
+        is_power: true,
+      },
+      {
+        type: "source_net",
+        source_net_id: "signal",
+        name: "SIGNAL",
+        member_source_group_ids: [],
+        is_digital_signal: true,
+      },
+      {
+        type: "pcb_via",
+        pcb_via_id: "ground_anchor",
+        x: -3,
+        y: 0,
+        outer_diameter: 0.6,
+        hole_diameter: 0.3,
+        layers: ["top", "bottom"],
+        source_net_id: "ground",
+      },
+      {
+        type: "pcb_via",
+        pcb_via_id: "power_anchor",
+        x: 3,
+        y: 0,
+        outer_diameter: 0.6,
+        hole_diameter: 0.3,
+        layers: ["top", "bottom"],
+        source_net_id: "power",
+      },
+      {
+        type: "pcb_trace",
+        pcb_trace_id: "signal_trace",
+        source_net_id: "signal",
+        route: [
+          { route_type: "wire", x: 0, y: -2, width: 1, layer: "top" },
+          { route_type: "wire", x: 0, y: 2, width: 1, layer: "top" },
+        ],
+      },
+    ] as AnyCircuitElement[]
+    const solver = new ImplicitCopperPourPipelineSolver({
+      circuitJson,
+      gridPitch: 1,
+      edgeSimplificationTolerance: 0,
+      minRegionArea: 0,
+      layers: ["top"],
+    })
+
+    solver.solve()
+
+    const output = solver.getOutput()
+    expect(output).toHaveLength(2)
+    expect(new Set(output.map((pour) => pour.source_net_id))).toEqual(
+      new Set(["ground", "power"]),
+    )
+    expect(
+      output.reduce((area, pour) => area + getAbsolutePolygonArea(pour), 0),
+    ).toBe(8 * 4)
+
+    const labeledProblem =
+      solver.getStageOutput<LabeledProblem>("assignGridCells")!
+    const signalNetIndex = labeledProblem.nets.findIndex(
+      (net) => net.sourceNet.source_net_id === "signal",
+    )
+    expect(
+      labeledProblem.labeledLayers[0]!.labels.every(
+        (netIndex) => netIndex >= 0 && netIndex !== signalNetIndex,
+      ),
+    ).toBe(true)
+  })
+
+  test("splits a region around another power net without overlap or gaps", () => {
+    const makeVia = (
+      pcbViaId: string,
+      x: number,
+      y: number,
+      sourceNetId: string,
+    ) => ({
+      type: "pcb_via" as const,
+      pcb_via_id: pcbViaId,
+      x,
+      y,
+      outer_diameter: 0.5,
+      hole_diameter: 0.2,
+      layers: ["top"],
+      source_net_id: sourceNetId,
+    })
+    const circuitJson = [
+      {
+        type: "pcb_board",
+        pcb_board_id: "board",
+        center: { x: 0, y: 0 },
+        width: 10,
+        height: 10,
+        thickness: 1.4,
+        num_layers: 2,
+        material: "fr4",
+      },
+      {
+        type: "source_net",
+        source_net_id: "ground",
+        name: "GND",
+        member_source_group_ids: [],
+        is_ground: true,
+      },
+      {
+        type: "source_net",
+        source_net_id: "power",
+        name: "VCC",
+        member_source_group_ids: [],
+        is_power: true,
+      },
+      makeVia("ground_left", -4, 0, "ground"),
+      makeVia("ground_right", 4, 0, "ground"),
+      makeVia("ground_top", 0, 4, "ground"),
+      makeVia("ground_bottom", 0, -4, "ground"),
+      makeVia("power_center", 0, 0, "power"),
+    ] as AnyCircuitElement[]
+    const solver = new ImplicitCopperPourPipelineSolver({
+      circuitJson,
+      gridPitch: 0.5,
+      layers: ["top"],
+    })
+
+    solver.solve()
+
+    const output = solver.getOutput()
+    expect(
+      output.filter((pour) => pour.source_net_id === "ground"),
+    ).toHaveLength(2)
+    expect(
+      output.filter((pour) => pour.source_net_id === "power"),
+    ).toHaveLength(1)
+    expect(
+      output.reduce((area, pour) => area + getAbsolutePolygonArea(pour), 0),
+    ).toBe(10 * 10)
   })
 
   test("supports explicit layer selection", () => {
@@ -162,6 +352,72 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     ).toBe("positive-rail")
   })
 
+  test("uses a connected power SMT pad as a power-region anchor", () => {
+    const circuitJson = [
+      {
+        type: "pcb_board",
+        pcb_board_id: "board",
+        center: { x: 0, y: 0 },
+        width: 4,
+        height: 4,
+        thickness: 1.4,
+        num_layers: 2,
+        material: "fr4",
+      },
+      {
+        type: "source_net",
+        source_net_id: "ground",
+        name: "GND",
+        member_source_group_ids: [],
+        is_ground: true,
+      },
+      {
+        type: "source_port",
+        source_port_id: "ground_source_port",
+        name: "GND",
+      },
+      {
+        type: "source_trace",
+        source_trace_id: "ground_source_trace",
+        connected_source_port_ids: ["ground_source_port"],
+        connected_source_net_ids: ["ground"],
+      },
+      {
+        type: "pcb_port",
+        pcb_port_id: "ground_pcb_port",
+        source_port_id: "ground_source_port",
+        pcb_component_id: "component",
+        x: 0,
+        y: 0,
+        layers: ["top"],
+      },
+      {
+        type: "pcb_smtpad",
+        pcb_smtpad_id: "ground_pad",
+        pcb_component_id: "component",
+        pcb_port_id: "ground_pcb_port",
+        shape: "rect",
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+        layer: "top",
+      },
+    ] as AnyCircuitElement[]
+    const solver = new ImplicitCopperPourPipelineSolver({
+      circuitJson,
+      gridPitch: 1,
+      layers: ["top"],
+    })
+
+    solver.solve()
+
+    const output = solver.getOutput()
+    expect(output).toHaveLength(1)
+    expect(output[0]?.source_net_id).toBe("ground")
+    expect(getAbsolutePolygonArea(output[0]!)).toBe(4 * 4)
+  })
+
   test("solves the nRF52810 Circuit JSON fixture", async () => {
     const solver = new ImplicitCopperPourPipelineSolver({
       circuitJson: nrf52810Board,
@@ -188,6 +444,8 @@ describe("ImplicitCopperPourPipelineSolver", () => {
       solver.getStageOutput<ImplicitCopperPourSolverOutput>(
         "tracePowerPolygons",
       )!
+    const labeledOutput =
+      solver.getStageOutput<LabeledProblem>("assignGridCells")!
     const tracedPointCount = tracedOutput.reduce(
       (sum, pour) => sum + (pour.shape === "polygon" ? pour.points.length : 0),
       0,
@@ -206,6 +464,15 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     expect(new Set(output.map((pour) => pour.source_net_id))).toEqual(
       new Set(["source_net_0", "source_net_1"]),
     )
+    for (const labeledLayer of labeledOutput.labeledLayers) {
+      const labeledArea =
+        labeledLayer.labels.filter((netIndex) => netIndex >= 0).length *
+        labeledOutput.gridPitch ** 2
+      const tracedArea = tracedOutput
+        .filter((pour) => pour.layer === labeledLayer.layer)
+        .reduce((area, pour) => area + getAbsolutePolygonArea(pour), 0)
+      expect(tracedArea).toBe(labeledArea)
+    }
 
     const solvedGraphics = solver.visualize()
     const pourGraphics =
@@ -263,7 +530,7 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     )
   })
 
-  test("includes unconnected plated holes as non-power obstacles", () => {
+  test("prepares unconnected plated holes without treating them as power", () => {
     const circuitJson = [
       {
         type: "pcb_board",
