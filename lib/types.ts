@@ -20,6 +20,11 @@ export interface ImplicitCopperPourSolverInput {
    * zero so the board remains completely partitioned between power nets.
    */
   minRegionArea?: number
+  /**
+   * Unanchored connected regions smaller than this area are merged into a
+   * larger adjacent region. Defaults to 0.5 mm². Set to zero to disable.
+   */
+  regionNormalizationArea?: number
   /** Copper layers to solve. Defaults to top and bottom. */
   layers?: LayerRef[]
   /** Whether emitted pours are covered by solder mask. Defaults to true. */
@@ -64,6 +69,7 @@ export type CopperPrimitive =
       kind: "segment"
       layers: LayerRef[]
       netIndex: number
+      isTrace?: boolean
       x1: number
       y1: number
       x2: number
@@ -85,6 +91,7 @@ export interface PreparedProblem {
   primitives: CopperPrimitive[]
   gridPitch: number
   minRegionArea: number
+  regionNormalizationArea: number
   coveredWithSolderMask: boolean
 }
 

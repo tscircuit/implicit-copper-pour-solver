@@ -8,14 +8,19 @@ The solver follows the power-trace-expansion algorithm from the supplied
 [JSX artifact](https://claude.ai/public/artifacts/e5ef6abf-7d47-478f-b76a-3d0d1ff3d55d):
 
 1. Sample a regular grid on each selected copper layer.
-2. Assign every in-board sample to its nearest power-net-owned pad, trace, or
-   via. Copper belonging to signal and other non-power nets is deliberately not
-   treated as an obstacle at this phase.
-3. Group four-connected cells with the same nearest net.
-4. Optionally discard regions below an explicitly configured minimum area.
-5. Trace each surviving grid region into one or more non-overlapping polygons.
-6. Simplify the traced edges to smooth grid-generated stair steps.
-7. Emit coarse region polygons for `source_net` elements with `is_power`,
+2. Sort power-net-owned pads, traces, and vias by distance from each sample.
+3. Prefer the nearest candidate whose decision ray does not cross a trace from
+   another net.
+4. When every candidate is blocked, locally normalize narrow fallback bulges
+   toward the clearly closer reachable power territory. Cells sampled directly
+   on a trace retain their nearest-net fallback because downstream clearance
+   removes that copper.
+5. Merge small unanchored connected regions into their dominant larger
+   neighbor, then group four-connected cells with the same net.
+6. Optionally discard regions below an explicitly configured minimum area.
+7. Trace each surviving grid region into one or more non-overlapping polygons.
+8. Simplify the traced edges to smooth grid-generated stair steps.
+9. Emit coarse region polygons for `source_net` elements with `is_power`,
    `is_ground`, or `is_positive_voltage_source` set. Except for the board
    outline, exact copper exclusions are deferred to the downstream solver.
 

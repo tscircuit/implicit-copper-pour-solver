@@ -1,37 +1,14 @@
 import type { Point } from "circuit-json"
+import {
+  distance,
+  doSegmentsIntersect,
+  onSegment,
+  pointToSegmentDistance,
+} from "@tscircuit/math-utils"
 
 const pointsEqual = (a: Point, b: Point): boolean => a.x === b.x && a.y === b.y
 
-const getSquaredSegmentDistance = (
-  point: Point,
-  start: Point,
-  end: Point,
-): number => {
-  let x = start.x
-  let y = start.y
-  const dx = end.x - x
-  const dy = end.y - y
-
-  if (dx !== 0 || dy !== 0) {
-    const t = ((point.x - x) * dx + (point.y - y) * dy) / (dx * dx + dy * dy)
-    if (t > 1) {
-      x = end.x
-      y = end.y
-    } else if (t > 0) {
-      x += dx * t
-      y += dy * t
-    }
-  }
-
-  const distanceX = point.x - x
-  const distanceY = point.y - y
-  return distanceX * distanceX + distanceY * distanceY
-}
-
-const simplifyRdpPath = (
-  points: Point[],
-  toleranceSquared: number,
-): Point[] => {
+const simplifyRdpPath = (points: Point[], tolerance: number): Point[] => {
   if (points.length <= 2) return [...points]
 
   const keep = new Uint8Array(points.length)
@@ -44,12 +21,16 @@ const simplifyRdpPath = (
     const first = points[firstIndex]!
     const last = points[lastIndex]!
     let furthestIndex = -1
-    let furthestDistance = toleranceSquared
+    let furthestDistance = tolerance
 
     for (let index = firstIndex + 1; index < lastIndex; index++) {
-      const distance = getSquaredSegmentDistance(points[index]!, first, last)
-      if (distance > furthestDistance) {
-        furthestDistance = distance
+      const segmentDistance = pointToSegmentDistance(
+        points[index]!,
+        first,
+        last,
+      )
+      if (segmentDistance > furthestDistance) {
+        furthestDistance = segmentDistance
         furthestIndex = index
       }
     }
@@ -76,10 +57,7 @@ const getSignedArea = (points: Point[]): number => {
 const crossProduct = (a: Point, b: Point, c: Point): number =>
   (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
 
-const simplifyOpenPath = (
-  points: Point[],
-  toleranceSquared: number,
-): Point[] => {
+const simplifyOpenPath = (points: Point[], tolerance: number): Point[] => {
   if (points.length <= 2) return [...points]
 
   const turnSigns = points.map((_, index) => {
@@ -88,7 +66,6 @@ const simplifyOpenPath = (
       crossProduct(points[index - 1]!, points[index]!, points[index + 1]!),
     )
   })
-  const tolerance = Math.sqrt(toleranceSquared)
   const anchorIndices = [0]
   for (let index = 1; index < points.length - 1; index++) {
     const turnSign = turnSigns[index]!
@@ -99,8 +76,8 @@ const simplifyOpenPath = (
     const point = points[index]!
     const next = points[index + 1]!
     const shortestLeg = Math.min(
-      Math.hypot(point.x - previous.x, point.y - previous.y),
-      Math.hypot(next.x - point.x, next.y - point.y),
+      distance(point, previous),
+      distance(next, point),
     )
     // Grid staircases alternate left/right turns with one grid-sized leg.
     // Repeated turns and larger isolated corners describe the real silhouette.
@@ -116,43 +93,11 @@ const simplifyOpenPath = (
     const endIndex = anchorIndices[index + 1]!
     const section = simplifyRdpPath(
       points.slice(startIndex, endIndex + 1),
-      toleranceSquared,
+      tolerance,
     )
     simplified.push(...(index === 0 ? section : section.slice(1)))
   }
   return simplified
-}
-
-const isPointOnSegment = (point: Point, start: Point, end: Point): boolean =>
-  point.x >= Math.min(start.x, end.x) &&
-  point.x <= Math.max(start.x, end.x) &&
-  point.y >= Math.min(start.y, end.y) &&
-  point.y <= Math.max(start.y, end.y)
-
-const segmentsIntersect = (
-  aStart: Point,
-  aEnd: Point,
-  bStart: Point,
-  bEnd: Point,
-): boolean => {
-  const abStart = crossProduct(aStart, aEnd, bStart)
-  const abEnd = crossProduct(aStart, aEnd, bEnd)
-  const baStart = crossProduct(bStart, bEnd, aStart)
-  const baEnd = crossProduct(bStart, bEnd, aEnd)
-
-  if (
-    ((abStart > 0 && abEnd < 0) || (abStart < 0 && abEnd > 0)) &&
-    ((baStart > 0 && baEnd < 0) || (baStart < 0 && baEnd > 0))
-  ) {
-    return true
-  }
-
-  return (
-    (abStart === 0 && isPointOnSegment(bStart, aStart, aEnd)) ||
-    (abEnd === 0 && isPointOnSegment(bEnd, aStart, aEnd)) ||
-    (baStart === 0 && isPointOnSegment(aStart, bStart, bEnd)) ||
-    (baEnd === 0 && isPointOnSegment(aEnd, bStart, bEnd))
-  )
 }
 
 const isSimplePolygon = (points: Point[]): boolean => {
@@ -172,7 +117,7 @@ const isSimplePolygon = (points: Point[]): boolean => {
       if (sharesEndpoint) continue
 
       if (
-        segmentsIntersect(
+        doSegmentsIntersect(
           points[firstIndex]!,
           points[firstEndIndex]!,
           points[secondIndex]!,
@@ -207,7 +152,7 @@ const isPointStrictlyInsideSegment = (
   if (pointsEqual(point, start) || pointsEqual(point, end)) return false
   const cross = crossProduct(start, end, point)
   if (Math.abs(cross) > 1e-9) return false
-  return isPointOnSegment(point, start, end)
+  return onSegment(start, point, end)
 }
 
 const splitEdgesAtVertices = (
@@ -270,7 +215,7 @@ export const simplifyPolygonEdges = (
   if (points.length < 4 || tolerance <= 0) return points
 
   const closedPath = [...points, points[0]!]
-  const simplified = simplifyOpenPath(closedPath, tolerance * tolerance)
+  const simplified = simplifyOpenPath(closedPath, tolerance)
   if (pointsEqual(simplified[0]!, simplified[simplified.length - 1]!)) {
     simplified.pop()
   }
@@ -478,10 +423,7 @@ export const simplifyPolygonSetEdges = (
         if (!arcs.has(arcKey)) {
           arcs.set(arcKey, {
             original: canonical.points,
-            simplified: simplifyOpenPath(
-              canonical.points,
-              tolerance * tolerance,
-            ),
+            simplified: simplifyOpenPath(canonical.points, tolerance),
             disabled: false,
           })
         }
@@ -490,7 +432,7 @@ export const simplifyPolygonSetEdges = (
         const arcKey = `outer:${polygonIndex}:${chainIndex}`
         arcs.set(arcKey, {
           original: chainPoints,
-          simplified: simplifyOpenPath(chainPoints, tolerance * tolerance),
+          simplified: simplifyOpenPath(chainPoints, tolerance),
           disabled: false,
         })
         chains.push({ arcKey, reversed: false })

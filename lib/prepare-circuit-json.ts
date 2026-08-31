@@ -11,10 +11,20 @@ import type {
 } from "circuit-json"
 import { getElementId } from "@tscircuit/circuit-json-util"
 import {
+  getBoundFromCenteredRect,
+  getBoundsFromPoints,
+} from "@tscircuit/math-utils"
+import {
   ConnectivityMap,
   findConnectedNetworks,
   getSourcePortConnectivityMapFromCircuitJson,
 } from "circuit-json-to-connectivity-map"
+import {
+  applyToPoints,
+  compose,
+  rotateDEG,
+  translate,
+} from "transformation-matrix"
 import type {
   CopperPrimitive,
   ImplicitCopperPourSolverInput,
@@ -24,19 +34,23 @@ import type {
 
 const DEFAULT_GRID_PITCH = 0.25
 const DEFAULT_MIN_REGION_AREA = 0
+const DEFAULT_REGION_NORMALIZATION_AREA = 0.5
 
 const getBoardOutline = (board: PcbBoard): Point[] => {
   if (board.outline && board.outline.length >= 3) return board.outline
   if (board.width === undefined || board.height === undefined) {
     throw new Error("pcb_board must provide an outline or width and height")
   }
-  const halfWidth = board.width / 2
-  const halfHeight = board.height / 2
+  const bounds = getBoundFromCenteredRect({
+    center: board.center,
+    width: board.width,
+    height: board.height,
+  })
   return [
-    { x: board.center.x - halfWidth, y: board.center.y - halfHeight },
-    { x: board.center.x + halfWidth, y: board.center.y - halfHeight },
-    { x: board.center.x + halfWidth, y: board.center.y + halfHeight },
-    { x: board.center.x - halfWidth, y: board.center.y + halfHeight },
+    { x: bounds.minX, y: bounds.minY },
+    { x: bounds.maxX, y: bounds.minY },
+    { x: bounds.maxX, y: bounds.maxY },
+    { x: bounds.minX, y: bounds.maxY },
   ]
 }
 
@@ -55,16 +69,23 @@ const addPillPrimitive = (
   const { layers, netIndex, x, y, width, height, rotation } = params
   const radius = Math.min(width, height) / 2
   const axisLength = Math.max(width, height) - radius * 2
-  const axisAngle = ((rotation + (height > width ? 90 : 0)) * Math.PI) / 180
   const halfAxis = axisLength / 2
+  const axisToWorld = compose(
+    translate(x, y),
+    rotateDEG(rotation + (height > width ? 90 : 0)),
+  )
+  const [start, end] = applyToPoints(axisToWorld, [
+    { x: -halfAxis, y: 0 },
+    { x: halfAxis, y: 0 },
+  ])
   primitives.push({
     kind: "segment",
     layers,
     netIndex,
-    x1: x - Math.cos(axisAngle) * halfAxis,
-    y1: y - Math.sin(axisAngle) * halfAxis,
-    x2: x + Math.cos(axisAngle) * halfAxis,
-    y2: y + Math.sin(axisAngle) * halfAxis,
+    x1: start!.x,
+    y1: start!.y,
+    x2: end!.x,
+    y2: end!.y,
     halfWidth: radius,
   })
 }
@@ -196,6 +217,7 @@ const addTrace = (
         kind: "segment",
         layers: [routePoint.layer],
         netIndex,
+        isTrace: true,
         x1: previousWire.x,
         y1: previousWire.y,
         x2: routePoint.x,
@@ -214,6 +236,8 @@ export const prepareCircuitJson = (
   const edgeSimplificationTolerance =
     input.edgeSimplificationTolerance ?? gridPitch
   const minRegionArea = input.minRegionArea ?? DEFAULT_MIN_REGION_AREA
+  const regionNormalizationArea =
+    input.regionNormalizationArea ?? DEFAULT_REGION_NORMALIZATION_AREA
   if (!(gridPitch > 0)) throw new Error("gridPitch must be greater than zero")
   if (
     !Number.isFinite(edgeSimplificationTolerance) ||
@@ -224,20 +248,16 @@ export const prepareCircuitJson = (
   if (!(minRegionArea >= 0)) {
     throw new Error("minRegionArea must be zero or greater")
   }
+  if (!(regionNormalizationArea >= 0)) {
+    throw new Error("regionNormalizationArea must be zero or greater")
+  }
 
   const board = input.circuitJson.find(
     (element): element is PcbBoard => element.type === "pcb_board",
   )
   if (!board) throw new Error("No pcb_board found in Circuit JSON")
   const boardOutline = getBoardOutline(board)
-  const xs = boardOutline.map((point) => point.x)
-  const ys = boardOutline.map((point) => point.y)
-  const bounds = {
-    minX: Math.min(...xs),
-    minY: Math.min(...ys),
-    maxX: Math.max(...xs),
-    maxY: Math.max(...ys),
-  }
+  const bounds = getBoundsFromPoints(boardOutline)!
 
   const sourceNets = input.circuitJson.filter(
     (element): element is SourceNet => element.type === "source_net",
@@ -495,6 +515,7 @@ export const prepareCircuitJson = (
     primitives,
     gridPitch,
     minRegionArea,
+    regionNormalizationArea,
     coveredWithSolderMask: input.coveredWithSolderMask ?? true,
   }
 }
