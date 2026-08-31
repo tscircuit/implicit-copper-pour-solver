@@ -5,8 +5,9 @@ import {
   ImplicitCopperPourPipelineSolver,
   type ImplicitCopperPourSolverOutput,
 } from "../lib"
+import { normalizeLabeledLayerRegions } from "../lib/grid-solver"
 import { prepareCircuitJson } from "../lib/prepare-circuit-json"
-import type { LabeledProblem } from "../lib/types"
+import type { LabeledLayer, LabeledProblem } from "../lib/types"
 import { filterGraphicsByLayer } from "./fixtures/filter-graphics-by-layer"
 import { nrf52810Board } from "./fixtures/nrf52810-board"
 import { simplePowerBoard } from "./fixtures/simple-power-board"
@@ -242,6 +243,24 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     expect(labeledProblem.labeledLayers[0]!.labels[leftCellIndex]).toBe(
       groundNetIndex,
     )
+  })
+
+  test("normalizes small unanchored regions into their larger neighbor", () => {
+    const makeLayer = (): LabeledLayer => ({
+      layer: "top",
+      labels: Int32Array.from([0, 0, 0, 0, 1, 0, 0, 0, 0]),
+      nx: 3,
+      ny: 3,
+    })
+    const normalizedLayer = makeLayer()
+    normalizeLabeledLayerRegions(normalizedLayer, new Uint8Array(9), 2)
+    expect([...normalizedLayer.labels]).toEqual(Array(9).fill(0))
+
+    const anchoredLayer = makeLayer()
+    const anchoredCells = new Uint8Array(9)
+    anchoredCells[4] = 1
+    normalizeLabeledLayerRegions(anchoredLayer, anchoredCells, 2)
+    expect(anchoredLayer.labels[4]).toBe(1)
   })
 
   test("splits a region around another power net without overlap or gaps", () => {
@@ -725,6 +744,17 @@ describe("ImplicitCopperPourPipelineSolver", () => {
 
     expect(() => solver.solve()).toThrow(
       "edgeSimplificationTolerance must be zero or greater",
+    )
+  })
+
+  test("rejects invalid region normalization areas", () => {
+    const solver = new ImplicitCopperPourPipelineSolver({
+      circuitJson: simplePowerBoard,
+      regionNormalizationArea: -1,
+    })
+
+    expect(() => solver.solve()).toThrow(
+      "regionNormalizationArea must be zero or greater",
     )
   })
 })

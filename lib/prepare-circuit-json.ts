@@ -24,6 +24,7 @@ import type {
 
 const DEFAULT_GRID_PITCH = 0.25
 const DEFAULT_MIN_REGION_AREA = 0
+const DEFAULT_REGION_NORMALIZATION_AREA = 0.5
 
 const getBoardOutline = (board: PcbBoard): Point[] => {
   if (board.outline && board.outline.length >= 3) return board.outline
@@ -215,6 +216,8 @@ export const prepareCircuitJson = (
   const edgeSimplificationTolerance =
     input.edgeSimplificationTolerance ?? gridPitch
   const minRegionArea = input.minRegionArea ?? DEFAULT_MIN_REGION_AREA
+  const regionNormalizationArea =
+    input.regionNormalizationArea ?? DEFAULT_REGION_NORMALIZATION_AREA
   if (!(gridPitch > 0)) throw new Error("gridPitch must be greater than zero")
   if (
     !Number.isFinite(edgeSimplificationTolerance) ||
@@ -224,6 +227,9 @@ export const prepareCircuitJson = (
   }
   if (!(minRegionArea >= 0)) {
     throw new Error("minRegionArea must be zero or greater")
+  }
+  if (!(regionNormalizationArea >= 0)) {
+    throw new Error("regionNormalizationArea must be zero or greater")
   }
 
   const board = input.circuitJson.find(
@@ -496,6 +502,7 @@ export const prepareCircuitJson = (
     primitives,
     gridPitch,
     minRegionArea,
+    regionNormalizationArea,
     coveredWithSolderMask: input.coveredWithSolderMask ?? true,
   }
 }
