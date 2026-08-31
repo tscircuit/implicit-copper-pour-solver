@@ -161,6 +161,89 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     ).toBe(true)
   })
 
+  test("does not assign a region through a foreign trace", () => {
+    const circuitJson = [
+      {
+        type: "pcb_board",
+        pcb_board_id: "board",
+        center: { x: 0, y: 0 },
+        width: 8,
+        height: 8,
+        thickness: 1.4,
+        num_layers: 2,
+        material: "fr4",
+      },
+      {
+        type: "source_net",
+        source_net_id: "ground",
+        name: "GND",
+        member_source_group_ids: [],
+        is_ground: true,
+      },
+      {
+        type: "source_net",
+        source_net_id: "power",
+        name: "VBAT",
+        member_source_group_ids: [],
+        is_power: true,
+      },
+      {
+        type: "source_net",
+        source_net_id: "signal",
+        name: "SIGNAL",
+        member_source_group_ids: [],
+        is_digital_signal: true,
+      },
+      {
+        type: "pcb_via",
+        pcb_via_id: "ground_anchor",
+        x: -3.5,
+        y: -3.5,
+        outer_diameter: 0.6,
+        hole_diameter: 0.3,
+        layers: ["top"],
+        source_net_id: "ground",
+      },
+      {
+        type: "pcb_via",
+        pcb_via_id: "power_anchor",
+        x: 0,
+        y: 0.5,
+        outer_diameter: 0.6,
+        hole_diameter: 0.3,
+        layers: ["top"],
+        source_net_id: "power",
+      },
+      {
+        type: "pcb_trace",
+        pcb_trace_id: "signal_barrier",
+        source_net_id: "signal",
+        route: [
+          { route_type: "wire", x: -2, y: -4, width: 0.2, layer: "top" },
+          { route_type: "wire", x: -2, y: 4, width: 0.2, layer: "top" },
+        ],
+      },
+    ] as AnyCircuitElement[]
+    const solver = new ImplicitCopperPourPipelineSolver({
+      circuitJson,
+      gridPitch: 1,
+      layers: ["top"],
+    })
+
+    solver.solve()
+
+    const labeledProblem =
+      solver.getStageOutput<LabeledProblem>("assignGridCells")!
+    const groundNetIndex = labeledProblem.nets.findIndex(
+      (net) => net.sourceNet.source_net_id === "ground",
+    )
+    const leftCellIndex = 4 * labeledProblem.labeledLayers[0]!.nx
+
+    expect(labeledProblem.labeledLayers[0]!.labels[leftCellIndex]).toBe(
+      groundNetIndex,
+    )
+  })
+
   test("splits a region around another power net without overlap or gaps", () => {
     const makeVia = (
       pcbViaId: string,

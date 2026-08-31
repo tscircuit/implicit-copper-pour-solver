@@ -64,6 +64,7 @@ export type CopperPrimitive =
       kind: "segment"
       layers: LayerRef[]
       netIndex: number
+      isTrace?: boolean
       x1: number
       y1: number
       x2: number

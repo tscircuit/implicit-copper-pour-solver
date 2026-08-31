@@ -1,10 +1,17 @@
 import type { LayerRef, PcbCopperPour, Point } from "circuit-json"
 import {
   distanceToPrimitive,
+  doesSegmentCrossTrace,
+  getClosestPointOnPrimitive,
   isPointInsidePolygon,
   traceLoops,
 } from "./geometry"
-import type { LabeledLayer, LabeledProblem, PreparedProblem } from "./types"
+import type {
+  CopperPrimitive,
+  LabeledLayer,
+  LabeledProblem,
+  PreparedProblem,
+} from "./types"
 
 export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
   const { bounds, boardOutline, gridPitch } = problem
@@ -18,6 +25,12 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
         primitive.layers.includes(layer) &&
         problem.nets[primitive.netIndex]?.isPower,
     )
+    const traceBarriers = problem.primitives.filter(
+      (primitive): primitive is Extract<CopperPrimitive, { kind: "segment" }> =>
+        primitive.kind === "segment" &&
+        primitive.isTrace === true &&
+        primitive.layers.includes(layer),
+    )
     const labels = new Int32Array(nx * ny).fill(-1)
 
     for (let j = 0; j < ny; j++) {
@@ -26,14 +39,28 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
         const x = bounds.minX + (i + 0.5) * gridPitch
         if (!isPointInsidePolygon({ x, y }, boardOutline)) continue
 
-        let bestDistance = Number.POSITIVE_INFINITY
-        let bestNetIndex = -1
-        for (const primitive of powerPrimitives) {
-          const distance = distanceToPrimitive(primitive, x, y)
-          if (distance < bestDistance) {
-            bestDistance = distance
-            bestNetIndex = primitive.netIndex
-            if (distance === 0) break
+        const point = { x, y }
+        const candidates = powerPrimitives
+          .map((primitive) => ({
+            primitive,
+            distance: distanceToPrimitive(primitive, x, y),
+          }))
+          .sort((a, b) => a.distance - b.distance)
+        let bestNetIndex = candidates[0]?.primitive.netIndex ?? -1
+
+        for (const candidate of candidates) {
+          const closestPoint = getClosestPointOnPrimitive(
+            candidate.primitive,
+            point,
+          )
+          const isBlocked = traceBarriers.some(
+            (trace) =>
+              trace.netIndex !== candidate.primitive.netIndex &&
+              doesSegmentCrossTrace(point, closestPoint, trace),
+          )
+          if (!isBlocked) {
+            bestNetIndex = candidate.primitive.netIndex
+            break
           }
         }
         labels[j * nx + i] = bestNetIndex

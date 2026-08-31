@@ -196,6 +196,7 @@ const addTrace = (
         kind: "segment",
         layers: [routePoint.layer],
         netIndex,
+        isTrace: true,
         x1: previousWire.x,
         y1: previousWire.y,
         x2: routePoint.x,
