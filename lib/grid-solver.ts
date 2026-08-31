@@ -49,6 +49,10 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
         let bestNetIndex = candidates[0]?.primitive.netIndex ?? -1
 
         for (const candidate of candidates) {
+          if (candidate.distance === 0) {
+            bestNetIndex = candidate.primitive.netIndex
+            break
+          }
           const closestPoint = getClosestPointOnPrimitive(
             candidate.primitive,
             point,

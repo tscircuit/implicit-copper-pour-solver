@@ -233,6 +233,21 @@ export const doesSegmentCrossTrace = (
   end: Point,
   trace: Extract<CopperPrimitive, { kind: "segment" }>,
 ): boolean => {
+  const expandedPathBounds = {
+    minX: Math.min(start.x, end.x) - trace.halfWidth,
+    minY: Math.min(start.y, end.y) - trace.halfWidth,
+    maxX: Math.max(start.x, end.x) + trace.halfWidth,
+    maxY: Math.max(start.y, end.y) + trace.halfWidth,
+  }
+  if (
+    Math.max(trace.x1, trace.x2) < expandedPathBounds.minX ||
+    Math.min(trace.x1, trace.x2) > expandedPathBounds.maxX ||
+    Math.max(trace.y1, trace.y2) < expandedPathBounds.minY ||
+    Math.min(trace.y1, trace.y2) > expandedPathBounds.maxY
+  ) {
+    return false
+  }
+
   const traceStart = { x: trace.x1, y: trace.y1 }
   const traceEnd = { x: trace.x2, y: trace.y2 }
   if (doSegmentsIntersect(start, end, traceStart, traceEnd)) return true
