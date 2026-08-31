@@ -422,7 +422,7 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     const solver = new ImplicitCopperPourPipelineSolver({
       circuitJson: nrf52810Board,
       gridPitch: 0.25,
-      minRegionArea: 2,
+      minRegionArea: 0,
     })
 
     const initialGraphics = solver.visualize()
