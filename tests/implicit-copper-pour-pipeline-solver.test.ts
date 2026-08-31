@@ -548,6 +548,23 @@ describe("ImplicitCopperPourPipelineSolver", () => {
       )!
     const labeledOutput =
       solver.getStageOutput<LabeledProblem>("assignGridCells")!
+    const topLayer = labeledOutput.labeledLayers.find(
+      (labeledLayer) => labeledLayer.layer === "top",
+    )!
+    const groundNetIndex = labeledOutput.nets.findIndex(
+      (net) => net.sourceNet.source_net_id === "source_net_1",
+    )
+    const getTopLabelAt = (x: number, y: number) => {
+      const i = Math.floor(
+        (x - labeledOutput.bounds.minX) / labeledOutput.gridPitch,
+      )
+      const j = Math.floor(
+        (y - labeledOutput.bounds.minY) / labeledOutput.gridPitch,
+      )
+      return topLayer.labels[j * topLayer.nx + i]
+    }
+    expect(getTopLabelAt(-4.125, -2.375)).toBe(groundNetIndex)
+    expect(getTopLabelAt(-4.375, -5.375)).toBe(groundNetIndex)
     const tracedPointCount = tracedOutput.reduce(
       (sum, pour) => sum + (pour.shape === "polygon" ? pour.points.length : 0),
       0,

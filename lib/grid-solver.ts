@@ -13,6 +13,111 @@ import type {
   PreparedProblem,
 } from "./types"
 
+const BLOCKED_CELL_LOCAL_REPAIR_RADIUS = 2
+
+const normalizeBlockedCellBoundaries = (
+  labeledLayer: LabeledLayer,
+  insideCells: Uint8Array,
+  visibleCells: Uint8Array,
+  traceBarriers: Array<Extract<CopperPrimitive, { kind: "segment" }>>,
+  problem: Pick<PreparedProblem, "bounds" | "gridPitch">,
+): void => {
+  const { labels, nx, ny } = labeledLayer
+  const netIndices = new Set<number>()
+
+  for (let cell = 0; cell < labels.length; cell++) {
+    if (visibleCells[cell] === 1 && labels[cell]! >= 0) {
+      netIndices.add(labels[cell]!)
+    }
+  }
+
+  const distancesByNet = new Map<number, Int8Array>()
+  for (const netIndex of netIndices) {
+    const distances = new Int8Array(labels.length).fill(-1)
+    const queue: number[] = []
+    for (let cell = 0; cell < labels.length; cell++) {
+      if (visibleCells[cell] !== 1 || labels[cell] !== netIndex) continue
+      distances[cell] = 0
+      queue.push(cell)
+    }
+
+    let queueIndex = 0
+    while (queueIndex < queue.length) {
+      const cell = queue[queueIndex++]!
+      // Repair only the shallow fallback band. Deeper blocked territory keeps
+      // its nearest-net ownership instead of being globally repartitioned.
+      if (distances[cell]! >= BLOCKED_CELL_LOCAL_REPAIR_RADIUS) continue
+      const i = cell % nx
+      const j = Math.floor(cell / nx)
+      const neighbors: number[] = []
+      if (i > 0) neighbors.push(cell - 1)
+      if (i < nx - 1) neighbors.push(cell + 1)
+      if (j > 0) neighbors.push(cell - nx)
+      if (j < ny - 1) neighbors.push(cell + nx)
+      const start = {
+        x: problem.bounds.minX + (i + 0.5) * problem.gridPitch,
+        y: problem.bounds.minY + (j + 0.5) * problem.gridPitch,
+      }
+
+      for (const neighbor of neighbors) {
+        if (
+          insideCells[neighbor] !== 1 ||
+          distances[neighbor]! >= 0 ||
+          (visibleCells[neighbor] === 1 && labels[neighbor] !== netIndex)
+        ) {
+          continue
+        }
+        const neighborI = neighbor % nx
+        const neighborJ = Math.floor(neighbor / nx)
+        const end = {
+          x: problem.bounds.minX + (neighborI + 0.5) * problem.gridPitch,
+          y: problem.bounds.minY + (neighborJ + 0.5) * problem.gridPitch,
+        }
+        const isBlocked = traceBarriers.some(
+          (trace) =>
+            trace.netIndex !== netIndex &&
+            doesSegmentCrossTrace(start, end, trace),
+        )
+        if (isBlocked) continue
+
+        distances[neighbor] = distances[cell]! + 1
+        queue.push(neighbor)
+      }
+    }
+    distancesByNet.set(netIndex, distances)
+  }
+
+  const relabels: Array<{ cell: number; netIndex: number }> = []
+  for (let cell = 0; cell < labels.length; cell++) {
+    const currentNetIndex = labels[cell]!
+    if (
+      insideCells[cell] !== 1 ||
+      currentNetIndex < 0 ||
+      visibleCells[cell] === 1
+    )
+      continue
+
+    const currentDistance = distancesByNet.get(currentNetIndex)?.[cell] ?? -1
+    const target = Array.from(distancesByNet.entries())
+      .map(([netIndex, distances]) => ({
+        netIndex,
+        distance: distances[cell]!,
+      }))
+      .filter(
+        (candidate) =>
+          candidate.netIndex !== currentNetIndex &&
+          candidate.distance >= 0 &&
+          (currentDistance < 0 || candidate.distance < currentDistance),
+      )
+      .sort((a, b) => a.distance - b.distance)[0]
+    if (target) relabels.push({ cell, netIndex: target.netIndex })
+  }
+
+  for (const relabel of relabels) {
+    labels[relabel.cell] = relabel.netIndex
+  }
+}
+
 export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
   const { bounds, boardOutline, gridPitch, regionNormalizationArea } = problem
   const nx = Math.max(1, Math.round((bounds.maxX - bounds.minX) / gridPitch))
@@ -37,12 +142,16 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
     )
     const labels = new Int32Array(nx * ny).fill(-1)
     const anchoredCells = new Uint8Array(nx * ny)
+    const insideCells = new Uint8Array(nx * ny)
+    const visibleCells = new Uint8Array(nx * ny)
 
     for (let j = 0; j < ny; j++) {
       const y = bounds.minY + (j + 0.5) * gridPitch
       for (let i = 0; i < nx; i++) {
         const x = bounds.minX + (i + 0.5) * gridPitch
         if (!isPointInsidePolygon({ x, y }, boardOutline)) continue
+        const cell = j * nx + i
+        insideCells[cell] = 1
 
         const point = { x, y }
         const candidates = powerPrimitives
@@ -53,11 +162,13 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
           .sort((a, b) => a.distance - b.distance)
         let bestNetIndex = candidates[0]?.primitive.netIndex ?? -1
         let isAnchored = false
+        let hasVisibleCandidate = false
 
         for (const candidate of candidates) {
           if (candidate.distance === 0) {
             bestNetIndex = candidate.primitive.netIndex
             isAnchored = true
+            hasVisibleCandidate = true
             break
           }
           const closestPoint = getClosestPointOnPrimitive(
@@ -71,15 +182,23 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
           )
           if (!isBlocked) {
             bestNetIndex = candidate.primitive.netIndex
+            hasVisibleCandidate = true
             break
           }
         }
-        const cell = j * nx + i
         labels[cell] = bestNetIndex
         if (isAnchored) anchoredCells[cell] = 1
+        if (hasVisibleCandidate) visibleCells[cell] = 1
       }
     }
     const labeledLayer = { layer, labels, nx, ny }
+    normalizeBlockedCellBoundaries(
+      labeledLayer,
+      insideCells,
+      visibleCells,
+      traceBarriers,
+      problem,
+    )
     normalizeLabeledLayerRegions(
       labeledLayer,
       anchoredCells,
