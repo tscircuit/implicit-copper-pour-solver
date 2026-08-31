@@ -1,4 +1,6 @@
 import type { LayerRef, PcbCopperPour, Point } from "circuit-json"
+import { clamp, grid, type GridCellPositions } from "@tscircuit/math-utils"
+import { applyToPoint, compose, scale, translate } from "transformation-matrix"
 import {
   distanceToPrimitive,
   doesSegmentCrossTrace,
@@ -20,7 +22,7 @@ const normalizeBlockedCellBoundaries = (
   insideCells: Uint8Array,
   visibleCells: Uint8Array,
   traceBarriers: Array<Extract<CopperPrimitive, { kind: "segment" }>>,
-  problem: Pick<PreparedProblem, "bounds" | "gridPitch">,
+  gridCells: GridCellPositions[],
 ): void => {
   const { labels, nx, ny } = labeledLayer
   const netIndices = new Set<number>()
@@ -54,10 +56,7 @@ const normalizeBlockedCellBoundaries = (
       if (i < nx - 1) neighbors.push(cell + 1)
       if (j > 0) neighbors.push(cell - nx)
       if (j < ny - 1) neighbors.push(cell + nx)
-      const start = {
-        x: problem.bounds.minX + (i + 0.5) * problem.gridPitch,
-        y: problem.bounds.minY + (j + 0.5) * problem.gridPitch,
-      }
+      const start = gridCells[cell]!.center
 
       for (const neighbor of neighbors) {
         if (
@@ -67,12 +66,7 @@ const normalizeBlockedCellBoundaries = (
         ) {
           continue
         }
-        const neighborI = neighbor % nx
-        const neighborJ = Math.floor(neighbor / nx)
-        const end = {
-          x: problem.bounds.minX + (neighborI + 0.5) * problem.gridPitch,
-          y: problem.bounds.minY + (neighborJ + 0.5) * problem.gridPitch,
-        }
+        const end = gridCells[neighbor]!.center
         const isBlocked = traceBarriers.some(
           (trace) =>
             trace.netIndex !== netIndex &&
@@ -126,6 +120,16 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
     1,
     Math.round(regionNormalizationArea / gridPitch ** 2),
   )
+  const gridCells = grid({
+    rows: ny,
+    cols: nx,
+    xSpacing: gridPitch,
+    ySpacing: gridPitch,
+    offsetX: bounds.minX,
+    offsetY: bounds.minY,
+    yDirection: "up-is-negative",
+    centered: false,
+  })
   const labeledLayers: LabeledLayer[] = []
 
   for (const layer of problem.layers) {
@@ -145,51 +149,45 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
     const insideCells = new Uint8Array(nx * ny)
     const visibleCells = new Uint8Array(nx * ny)
 
-    for (let j = 0; j < ny; j++) {
-      const y = bounds.minY + (j + 0.5) * gridPitch
-      for (let i = 0; i < nx; i++) {
-        const x = bounds.minX + (i + 0.5) * gridPitch
-        if (!isPointInsidePolygon({ x, y }, boardOutline)) continue
-        const cell = j * nx + i
-        insideCells[cell] = 1
+    for (const { index: cell, center: point } of gridCells) {
+      if (!isPointInsidePolygon(point, boardOutline)) continue
+      insideCells[cell] = 1
 
-        const point = { x, y }
-        const candidates = powerPrimitives
-          .map((primitive) => ({
-            primitive,
-            distance: distanceToPrimitive(primitive, x, y),
-          }))
-          .sort((a, b) => a.distance - b.distance)
-        let bestNetIndex = candidates[0]?.primitive.netIndex ?? -1
-        let isAnchored = false
-        let hasVisibleCandidate = false
+      const candidates = powerPrimitives
+        .map((primitive) => ({
+          primitive,
+          distance: distanceToPrimitive(primitive, point.x, point.y),
+        }))
+        .sort((a, b) => a.distance - b.distance)
+      let bestNetIndex = candidates[0]?.primitive.netIndex ?? -1
+      let isAnchored = false
+      let hasVisibleCandidate = false
 
-        for (const candidate of candidates) {
-          if (candidate.distance === 0) {
-            bestNetIndex = candidate.primitive.netIndex
-            isAnchored = true
-            hasVisibleCandidate = true
-            break
-          }
-          const closestPoint = getClosestPointOnPrimitive(
-            candidate.primitive,
-            point,
-          )
-          const isBlocked = traceBarriers.some(
-            (trace) =>
-              trace.netIndex !== candidate.primitive.netIndex &&
-              doesSegmentCrossTrace(point, closestPoint, trace),
-          )
-          if (!isBlocked) {
-            bestNetIndex = candidate.primitive.netIndex
-            hasVisibleCandidate = true
-            break
-          }
+      for (const candidate of candidates) {
+        if (candidate.distance === 0) {
+          bestNetIndex = candidate.primitive.netIndex
+          isAnchored = true
+          hasVisibleCandidate = true
+          break
         }
-        labels[cell] = bestNetIndex
-        if (isAnchored) anchoredCells[cell] = 1
-        if (hasVisibleCandidate) visibleCells[cell] = 1
+        const closestPoint = getClosestPointOnPrimitive(
+          candidate.primitive,
+          point,
+        )
+        const isBlocked = traceBarriers.some(
+          (trace) =>
+            trace.netIndex !== candidate.primitive.netIndex &&
+            doesSegmentCrossTrace(point, closestPoint, trace),
+        )
+        if (!isBlocked) {
+          bestNetIndex = candidate.primitive.netIndex
+          hasVisibleCandidate = true
+          break
+        }
       }
+      labels[cell] = bestNetIndex
+      if (isAnchored) anchoredCells[cell] = 1
+      if (hasVisibleCandidate) visibleCells[cell] = 1
     }
     const labeledLayer = { layer, labels, nx, ny }
     normalizeBlockedCellBoundaries(
@@ -197,7 +195,7 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
       insideCells,
       visibleCells,
       traceBarriers,
-      problem,
+      gridCells,
     )
     normalizeLabeledLayerRegions(
       labeledLayer,
@@ -425,6 +423,10 @@ export const buildPowerPourPolygons = (
     1,
     Math.round(problem.minRegionArea / problem.gridPitch ** 2),
   )
+  const gridVertexToWorld = compose(
+    translate(problem.bounds.minX, problem.bounds.minY),
+    scale(problem.gridPitch),
+  )
 
   for (const labeledLayer of problem.labeledLayers) {
     const regions = getConnectedRegions(labeledLayer)
@@ -442,16 +444,13 @@ export const buildPowerPourPolygons = (
           throw new Error("Implicit copper region part must have one outline")
         }
         const loop = loops[0]!
-        const points: Point[] = loop.map(([i, j]) => ({
-          x: Math.min(
-            problem.bounds.maxX,
-            problem.bounds.minX + i * problem.gridPitch,
-          ),
-          y: Math.min(
-            problem.bounds.maxY,
-            problem.bounds.minY + j * problem.gridPitch,
-          ),
-        }))
+        const points: Point[] = loop.map(([i, j]) => {
+          const point = applyToPoint(gridVertexToWorld, { x: i, y: j })
+          return {
+            x: clamp(point.x, problem.bounds.minX, problem.bounds.maxX),
+            y: clamp(point.y, problem.bounds.minY, problem.bounds.maxY),
+          }
+        })
         output.push({
           type: "pcb_copper_pour",
           pcb_copper_pour_id: `pcb_copper_pour_${sanitizeIdPart(labeledLayer.layer)}_${sanitizeIdPart(net.sourceNet.source_net_id)}_${regionIndex}_${partIndex}`,

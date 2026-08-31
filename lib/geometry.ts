@@ -1,50 +1,54 @@
 import type { Point } from "circuit-json"
+import {
+  clamp,
+  distance,
+  doBoundsOverlap,
+  getBoundsFromPoints,
+  getUnitVectorFromPointAToB,
+  isPointInsidePolygon,
+  pointToBoxDistance,
+  pointToSegmentClosestPoint,
+  pointToSegmentDistance,
+  segmentToSegmentMinDistance,
+} from "@tscircuit/math-utils"
+import {
+  applyToPoint,
+  compose,
+  rotateDEG,
+  translate,
+  type Matrix,
+} from "transformation-matrix"
 import type { CopperPrimitive } from "./types"
 
-const getClosestPointOnSegment = (
-  px: number,
-  py: number,
-  x1: number,
-  y1: number,
-  x2: number,
-  y2: number,
-): Point => {
-  const vx = x2 - x1
-  const vy = y2 - y1
-  const lengthSquared = vx * vx + vy * vy
-  const unclampedT =
-    lengthSquared > 0 ? ((px - x1) * vx + (py - y1) * vy) / lengthSquared : 0
-  const t = Math.max(0, Math.min(1, unclampedT))
-  return { x: x1 + t * vx, y: y1 + t * vy }
-}
+type RectPrimitive = Extract<CopperPrimitive, { kind: "rect" }>
 
-const distanceToSegment = (
-  px: number,
-  py: number,
-  x1: number,
-  y1: number,
-  x2: number,
-  y2: number,
-): number => {
-  const closestPoint = getClosestPointOnSegment(px, py, x1, y1, x2, y2)
-  return Math.hypot(px - closestPoint.x, py - closestPoint.y)
-}
+const rectTransforms = new WeakMap<
+  RectPrimitive,
+  { toLocal: Matrix; toWorld: Matrix }
+>()
 
-export const isPointInsidePolygon = (
-  point: Point,
-  polygon: Point[],
-): boolean => {
-  let inside = false
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const a = polygon[i]!
-    const b = polygon[j]!
-    const crosses =
-      a.y > point.y !== b.y > point.y &&
-      point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x
-    if (crosses) inside = !inside
+const getRectTransforms = (primitive: RectPrimitive) => {
+  const cached = rectTransforms.get(primitive)
+  if (cached) return cached
+
+  const transforms = {
+    // compose applies the rightmost operation first: move the world point to
+    // the rectangle origin, then undo its counter-clockwise rotation.
+    toLocal: compose(
+      rotateDEG(-primitive.rotation),
+      translate(-primitive.x, -primitive.y),
+    ),
+    // Rotate a rectangle-local point before translating it into board space.
+    toWorld: compose(
+      translate(primitive.x, primitive.y),
+      rotateDEG(primitive.rotation),
+    ),
   }
-  return inside
+  rectTransforms.set(primitive, transforms)
+  return transforms
 }
+
+export { isPointInsidePolygon }
 
 const distanceToPolygon = (point: Point, polygon: Point[]): number => {
   if (isPointInsidePolygon(point, polygon)) return 0
@@ -52,10 +56,7 @@ const distanceToPolygon = (point: Point, polygon: Point[]): number => {
   for (let index = 0; index < polygon.length; index++) {
     const start = polygon[index]!
     const end = polygon[(index + 1) % polygon.length]!
-    best = Math.min(
-      best,
-      distanceToSegment(point.x, point.y, start.x, start.y, end.x, end.y),
-    )
+    best = Math.min(best, pointToSegmentDistance(point, start, end))
   }
   return best
 }
@@ -65,39 +66,32 @@ export const distanceToPrimitive = (
   px: number,
   py: number,
 ): number => {
+  const point = { x: px, y: py }
   if (primitive.kind === "circle") {
-    return Math.max(
-      Math.hypot(px - primitive.x, py - primitive.y) - primitive.radius,
-      0,
-    )
+    return Math.max(distance(point, primitive) - primitive.radius, 0)
   }
 
   if (primitive.kind === "segment") {
     return Math.max(
-      distanceToSegment(
-        px,
-        py,
-        primitive.x1,
-        primitive.y1,
-        primitive.x2,
-        primitive.y2,
+      pointToSegmentDistance(
+        point,
+        { x: primitive.x1, y: primitive.y1 },
+        { x: primitive.x2, y: primitive.y2 },
       ) - primitive.halfWidth,
       0,
     )
   }
 
   if (primitive.kind === "polygon") {
-    return distanceToPolygon({ x: px, y: py }, primitive.points)
+    return distanceToPolygon(point, primitive.points)
   }
 
-  const angle = (-primitive.rotation * Math.PI) / 180
-  const dx = px - primitive.x
-  const dy = py - primitive.y
-  const localX = dx * Math.cos(angle) - dy * Math.sin(angle)
-  const localY = dx * Math.sin(angle) + dy * Math.cos(angle)
-  const outsideX = Math.max(Math.abs(localX) - primitive.halfWidth, 0)
-  const outsideY = Math.max(Math.abs(localY) - primitive.halfHeight, 0)
-  return Math.hypot(outsideX, outsideY)
+  const { toLocal } = getRectTransforms(primitive)
+  return pointToBoxDistance(applyToPoint(toLocal, point), {
+    center: { x: 0, y: 0 },
+    width: primitive.halfWidth * 2,
+    height: primitive.halfHeight * 2,
+  })
 }
 
 export const getClosestPointOnPrimitive = (
@@ -107,30 +101,24 @@ export const getClosestPointOnPrimitive = (
   if (distanceToPrimitive(primitive, point.x, point.y) === 0) return point
 
   if (primitive.kind === "circle") {
-    const dx = point.x - primitive.x
-    const dy = point.y - primitive.y
-    const distance = Math.hypot(dx, dy)
+    const center = { x: primitive.x, y: primitive.y }
+    const direction = getUnitVectorFromPointAToB(center, point)
     return {
-      x: primitive.x + (dx / distance) * primitive.radius,
-      y: primitive.y + (dy / distance) * primitive.radius,
+      x: primitive.x + direction.x * primitive.radius,
+      y: primitive.y + direction.y * primitive.radius,
     }
   }
 
   if (primitive.kind === "segment") {
-    const centerlinePoint = getClosestPointOnSegment(
-      point.x,
-      point.y,
-      primitive.x1,
-      primitive.y1,
-      primitive.x2,
-      primitive.y2,
+    const centerlinePoint = pointToSegmentClosestPoint(
+      point,
+      { x: primitive.x1, y: primitive.y1 },
+      { x: primitive.x2, y: primitive.y2 },
     )
-    const dx = point.x - centerlinePoint.x
-    const dy = point.y - centerlinePoint.y
-    const distance = Math.hypot(dx, dy)
+    const direction = getUnitVectorFromPointAToB(centerlinePoint, point)
     return {
-      x: centerlinePoint.x + (dx / distance) * primitive.halfWidth,
-      y: centerlinePoint.y + (dy / distance) * primitive.halfWidth,
+      x: centerlinePoint.x + direction.x * primitive.halfWidth,
+      y: centerlinePoint.y + direction.y * primitive.halfWidth,
     }
   }
 
@@ -140,92 +128,22 @@ export const getClosestPointOnPrimitive = (
     for (let index = 0; index < primitive.points.length; index++) {
       const start = primitive.points[index]!
       const end = primitive.points[(index + 1) % primitive.points.length]!
-      const candidate = getClosestPointOnSegment(
-        point.x,
-        point.y,
-        start.x,
-        start.y,
-        end.x,
-        end.y,
-      )
-      const distance = Math.hypot(point.x - candidate.x, point.y - candidate.y)
-      if (distance < bestDistance) {
-        bestDistance = distance
+      const candidate = pointToSegmentClosestPoint(point, start, end)
+      const candidateDistance = distance(point, candidate)
+      if (candidateDistance < bestDistance) {
+        bestDistance = candidateDistance
         closestPoint = candidate
       }
     }
     return closestPoint
   }
 
-  const angle = (-primitive.rotation * Math.PI) / 180
-  const dx = point.x - primitive.x
-  const dy = point.y - primitive.y
-  const localX = dx * Math.cos(angle) - dy * Math.sin(angle)
-  const localY = dx * Math.sin(angle) + dy * Math.cos(angle)
-  const closestLocalX = Math.max(
-    -primitive.halfWidth,
-    Math.min(primitive.halfWidth, localX),
-  )
-  const closestLocalY = Math.max(
-    -primitive.halfHeight,
-    Math.min(primitive.halfHeight, localY),
-  )
-  const inverseAngle = -angle
-  return {
-    x:
-      primitive.x +
-      closestLocalX * Math.cos(inverseAngle) -
-      closestLocalY * Math.sin(inverseAngle),
-    y:
-      primitive.y +
-      closestLocalX * Math.sin(inverseAngle) +
-      closestLocalY * Math.cos(inverseAngle),
-  }
-}
-
-const getOrientation = (a: Point, b: Point, c: Point): number =>
-  (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
-
-const isPointOnSegment = (point: Point, start: Point, end: Point): boolean =>
-  point.x >= Math.min(start.x, end.x) &&
-  point.x <= Math.max(start.x, end.x) &&
-  point.y >= Math.min(start.y, end.y) &&
-  point.y <= Math.max(start.y, end.y)
-
-const doSegmentsIntersect = (
-  firstStart: Point,
-  firstEnd: Point,
-  secondStart: Point,
-  secondEnd: Point,
-): boolean => {
-  const o1 = getOrientation(firstStart, firstEnd, secondStart)
-  const o2 = getOrientation(firstStart, firstEnd, secondEnd)
-  const o3 = getOrientation(secondStart, secondEnd, firstStart)
-  const o4 = getOrientation(secondStart, secondEnd, firstEnd)
-  const epsilon = 1e-9
-
-  if (o1 * o2 < 0 && o3 * o4 < 0) return true
-  if (
-    Math.abs(o1) <= epsilon &&
-    isPointOnSegment(secondStart, firstStart, firstEnd)
-  )
-    return true
-  if (
-    Math.abs(o2) <= epsilon &&
-    isPointOnSegment(secondEnd, firstStart, firstEnd)
-  )
-    return true
-  if (
-    Math.abs(o3) <= epsilon &&
-    isPointOnSegment(firstStart, secondStart, secondEnd)
-  )
-    return true
-  if (
-    Math.abs(o4) <= epsilon &&
-    isPointOnSegment(firstEnd, secondStart, secondEnd)
-  )
-    return true
-  return false
+  const { toLocal, toWorld } = getRectTransforms(primitive)
+  const localPoint = applyToPoint(toLocal, point)
+  return applyToPoint(toWorld, {
+    x: clamp(localPoint.x, -primitive.halfWidth, primitive.halfWidth),
+    y: clamp(localPoint.y, -primitive.halfHeight, primitive.halfHeight),
+  })
 }
 
 export const doesSegmentCrossTrace = (
@@ -233,32 +151,24 @@ export const doesSegmentCrossTrace = (
   end: Point,
   trace: Extract<CopperPrimitive, { kind: "segment" }>,
 ): boolean => {
+  const pathBounds = getBoundsFromPoints([start, end])!
   const expandedPathBounds = {
-    minX: Math.min(start.x, end.x) - trace.halfWidth,
-    minY: Math.min(start.y, end.y) - trace.halfWidth,
-    maxX: Math.max(start.x, end.x) + trace.halfWidth,
-    maxY: Math.max(start.y, end.y) + trace.halfWidth,
+    minX: pathBounds.minX - trace.halfWidth,
+    minY: pathBounds.minY - trace.halfWidth,
+    maxX: pathBounds.maxX + trace.halfWidth,
+    maxY: pathBounds.maxY + trace.halfWidth,
   }
-  if (
-    Math.max(trace.x1, trace.x2) < expandedPathBounds.minX ||
-    Math.min(trace.x1, trace.x2) > expandedPathBounds.maxX ||
-    Math.max(trace.y1, trace.y2) < expandedPathBounds.minY ||
-    Math.min(trace.y1, trace.y2) > expandedPathBounds.maxY
-  ) {
+  const traceStart = { x: trace.x1, y: trace.y1 }
+  const traceEnd = { x: trace.x2, y: trace.y2 }
+  const traceBounds = getBoundsFromPoints([traceStart, traceEnd])!
+  if (!doBoundsOverlap(traceBounds, expandedPathBounds)) {
     return false
   }
 
-  const traceStart = { x: trace.x1, y: trace.y1 }
-  const traceEnd = { x: trace.x2, y: trace.y2 }
-  if (doSegmentsIntersect(start, end, traceStart, traceEnd)) return true
-
-  const distance = Math.min(
-    distanceToSegment(start.x, start.y, trace.x1, trace.y1, trace.x2, trace.y2),
-    distanceToSegment(end.x, end.y, trace.x1, trace.y1, trace.x2, trace.y2),
-    distanceToSegment(trace.x1, trace.y1, start.x, start.y, end.x, end.y),
-    distanceToSegment(trace.x2, trace.y2, start.x, start.y, end.x, end.y),
+  return (
+    segmentToSegmentMinDistance(start, end, traceStart, traceEnd) <=
+    trace.halfWidth
   )
-  return distance <= trace.halfWidth
 }
 
 export const traceLoops = (
