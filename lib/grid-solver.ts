@@ -1,11 +1,12 @@
 import type { LayerRef, PcbCopperPour, Point } from "circuit-json"
 import {
   clamp,
+  distSq,
   getBoundsFromPoints,
   grid,
   type GridCellPositions,
   midpoint,
-  pointToSegmentDistance,
+  pointToSegmentClosestPoint,
 } from "@tscircuit/math-utils"
 import { applyToPoint, compose, scale, translate } from "transformation-matrix"
 import {
@@ -31,7 +32,7 @@ interface TraceClearanceBarrier {
   netIndex: number
   start: Point
   end: Point
-  radius: number
+  radiusSquared: number
   minX: number
   minY: number
   maxX: number
@@ -41,22 +42,18 @@ interface TraceClearanceBarrier {
 interface ClearanceConnectivityContext {
   labels: Int32Array
   nx: number
-  ny: number
   traceBarriers: TraceClearanceBarrier[]
   gridCells: GridCellPositions[]
   gridPitch: number
-  crossingCacheByNetIndex: Map<number, Uint8Array>
+  canCrossGridEdgeByNetIndex: Map<number, CanCrossGridEdge>
 }
 
-const getGridNeighbors = ({
-  cell,
-  nx,
-  ny,
-}: {
-  cell: number
-  nx: number
-  ny: number
-}): number[] => {
+type CanCrossGridEdge = (startCell: number, endCell: number) => boolean
+
+const getGridNeighbors = (
+  cell: number,
+  { nx, ny }: Pick<LabeledLayer, "nx" | "ny">,
+): number[] => {
   const i = cell % nx
   const j = Math.floor(cell / nx)
   const neighbors: number[] = []
@@ -67,82 +64,91 @@ const getGridNeighbors = ({
   return neighbors
 }
 
-const canCrossGridEdgeForNet = (
-  {
-    startCell,
-    endCell,
-    netIndex,
-  }: { startCell: number; endCell: number; netIndex: number },
+const createCanCrossGridEdgeForNet = (
+  netIndex: number,
   ctx: ClearanceConnectivityContext,
-): boolean => {
-  let crossingCache = ctx.crossingCacheByNetIndex.get(netIndex)
-  if (!crossingCache) {
-    crossingCache = new Uint8Array(ctx.labels.length * 2)
-    ctx.crossingCacheByNetIndex.set(netIndex, crossingCache)
-  }
-  const edgeIndex =
-    Math.min(startCell, endCell) * 2 +
-    (Math.abs(startCell - endCell) === ctx.nx ? 1 : 0)
-  const cachedCrossing = crossingCache[edgeIndex]
-  if (cachedCrossing !== 0) return cachedCrossing === 1
+): CanCrossGridEdge => {
+  const crossingCache = new Uint8Array(ctx.labels.length * 2)
+  return (startCell, endCell) => {
+    const edgeIndex =
+      Math.min(startCell, endCell) * 2 +
+      (Math.abs(startCell - endCell) === ctx.nx ? 1 : 0)
+    const cachedCrossing = crossingCache[edgeIndex]
+    if (cachedCrossing !== 0) return cachedCrossing === 1
 
-  const start = ctx.gridCells[startCell]!.center
-  const end = ctx.gridCells[endCell]!.center
-  const boundaryMidpoint = midpoint(start, end)
-  const isHorizontalNeighbor = start.y === end.y
-  const boundary = isHorizontalNeighbor
-    ? {
-        minX: boundaryMidpoint.x,
-        minY: boundaryMidpoint.y - ctx.gridPitch / 2,
-        maxX: boundaryMidpoint.x,
-        maxY: boundaryMidpoint.y + ctx.gridPitch / 2,
-      }
-    : {
-        minX: boundaryMidpoint.x - ctx.gridPitch / 2,
-        minY: boundaryMidpoint.y,
-        maxX: boundaryMidpoint.x + ctx.gridPitch / 2,
-        maxY: boundaryMidpoint.y,
-      }
-  let blockedSamples = 0
-  const allSamplesBlocked = (1 << CELL_BOUNDARY_SAMPLE_COUNT) - 1
+    const start = ctx.gridCells[startCell]!.center
+    const end = ctx.gridCells[endCell]!.center
+    const boundaryMidpoint = midpoint(start, end)
+    const isHorizontalNeighbor = start.y === end.y
+    const boundary = isHorizontalNeighbor
+      ? {
+          minX: boundaryMidpoint.x,
+          minY: boundaryMidpoint.y - ctx.gridPitch / 2,
+          maxX: boundaryMidpoint.x,
+          maxY: boundaryMidpoint.y + ctx.gridPitch / 2,
+        }
+      : {
+          minX: boundaryMidpoint.x - ctx.gridPitch / 2,
+          minY: boundaryMidpoint.y,
+          maxX: boundaryMidpoint.x + ctx.gridPitch / 2,
+          maxY: boundaryMidpoint.y,
+        }
+    let blockedSamples = 0
+    const allSamplesBlocked = (1 << CELL_BOUNDARY_SAMPLE_COUNT) - 1
 
-  for (const trace of ctx.traceBarriers) {
-    if (
-      trace.netIndex === netIndex ||
-      trace.maxX < boundary.minX ||
-      trace.minX > boundary.maxX ||
-      trace.maxY < boundary.minY ||
-      trace.minY > boundary.maxY
-    ) {
-      continue
-    }
-
-    for (
-      let sampleIndex = 0;
-      sampleIndex < CELL_BOUNDARY_SAMPLE_COUNT;
-      sampleIndex++
-    ) {
-      const sampleBit = 1 << sampleIndex
-      if ((blockedSamples & sampleBit) !== 0) continue
-      const offset =
-        -ctx.gridPitch / 2 +
-        (ctx.gridPitch * sampleIndex) / (CELL_BOUNDARY_SAMPLE_COUNT - 1)
-      const point = isHorizontalNeighbor
-        ? { x: boundaryMidpoint.x, y: boundaryMidpoint.y + offset }
-        : { x: boundaryMidpoint.x + offset, y: boundaryMidpoint.y }
+    for (const trace of ctx.traceBarriers) {
       if (
-        pointToSegmentDistance(point, trace.start, trace.end) <= trace.radius
+        trace.netIndex === netIndex ||
+        trace.maxX < boundary.minX ||
+        trace.minX > boundary.maxX ||
+        trace.maxY < boundary.minY ||
+        trace.minY > boundary.maxY
       ) {
-        blockedSamples |= sampleBit
+        continue
+      }
+
+      for (
+        let sampleIndex = 0;
+        sampleIndex < CELL_BOUNDARY_SAMPLE_COUNT;
+        sampleIndex++
+      ) {
+        const sampleBit = 1 << sampleIndex
+        if ((blockedSamples & sampleBit) !== 0) continue
+        const offset =
+          -ctx.gridPitch / 2 +
+          (ctx.gridPitch * sampleIndex) / (CELL_BOUNDARY_SAMPLE_COUNT - 1)
+        const point = isHorizontalNeighbor
+          ? { x: boundaryMidpoint.x, y: boundaryMidpoint.y + offset }
+          : { x: boundaryMidpoint.x + offset, y: boundaryMidpoint.y }
+        const closestTracePoint = pointToSegmentClosestPoint(
+          point,
+          trace.start,
+          trace.end,
+        )
+        if (distSq(point, closestTracePoint) <= trace.radiusSquared) {
+          blockedSamples |= sampleBit
+        }
+      }
+      if (blockedSamples === allSamplesBlocked) {
+        crossingCache[edgeIndex] = 2
+        return false
       }
     }
-    if (blockedSamples === allSamplesBlocked) {
-      crossingCache[edgeIndex] = 2
-      return false
-    }
+    crossingCache[edgeIndex] = 1
+    return true
   }
-  crossingCache[edgeIndex] = 1
-  return true
+}
+
+const getCanCrossGridEdgeForNet = (
+  netIndex: number,
+  ctx: ClearanceConnectivityContext,
+): CanCrossGridEdge => {
+  let canCrossGridEdge = ctx.canCrossGridEdgeByNetIndex.get(netIndex)
+  if (!canCrossGridEdge) {
+    canCrossGridEdge = createCanCrossGridEdgeForNet(netIndex, ctx)
+    ctx.canCrossGridEdgeByNetIndex.set(netIndex, canCrossGridEdge)
+  }
+  return canCrossGridEdge
 }
 
 /**
@@ -179,7 +185,7 @@ const normalizeClearanceSeparatedRegions = ({
         netIndex: trace.netIndex,
         start,
         end,
-        radius,
+        radiusSquared: radius ** 2,
         minX: centerlineBounds.minX - radius,
         minY: centerlineBounds.minY - radius,
         maxX: centerlineBounds.maxX + radius,
@@ -190,11 +196,10 @@ const normalizeClearanceSeparatedRegions = ({
   const clearanceConnectivityContext: ClearanceConnectivityContext = {
     labels,
     nx,
-    ny,
     traceBarriers: clearanceTraceBarriers,
     gridCells,
     gridPitch,
-    crossingCacheByNetIndex: new Map<number, Uint8Array>(),
+    canCrossGridEdgeByNetIndex: new Map<number, CanCrossGridEdge>(),
   }
   const reachableCells = new Uint8Array(labels.length)
   const queue: number[] = []
@@ -214,14 +219,14 @@ const normalizeClearanceSeparatedRegions = ({
   while (queueIndex < queue.length) {
     const cell = queue[queueIndex++]!
     const netIndex = labels[cell]!
-    for (const neighbor of getGridNeighbors({ cell, nx, ny })) {
+    for (const neighbor of getGridNeighbors(cell, labeledLayer)) {
       if (
         insideCells[neighbor] !== 1 ||
         reachableCells[neighbor] === 1 ||
         labels[neighbor] !== netIndex ||
-        !canCrossGridEdgeForNet(
-          { startCell: cell, endCell: neighbor, netIndex },
-          clearanceConnectivityContext,
+        !getCanCrossGridEdgeForNet(netIndex, clearanceConnectivityContext)(
+          cell,
+          neighbor,
         )
       ) {
         continue
@@ -252,15 +257,15 @@ const normalizeClearanceSeparatedRegions = ({
     while (componentQueue.length > 0) {
       const cell = componentQueue.pop()!
       component.push(cell)
-      for (const neighbor of getGridNeighbors({ cell, nx, ny })) {
+      for (const neighbor of getGridNeighbors(cell, labeledLayer)) {
         if (
           insideCells[neighbor] !== 1 ||
           visitedCells[neighbor] === 1 ||
           reachableCells[neighbor] === 1 ||
           labels[neighbor] !== netIndex ||
-          !canCrossGridEdgeForNet(
-            { startCell: cell, endCell: neighbor, netIndex },
-            clearanceConnectivityContext,
+          !getCanCrossGridEdgeForNet(netIndex, clearanceConnectivityContext)(
+            cell,
+            neighbor,
           )
         ) {
           continue
@@ -272,20 +277,16 @@ const normalizeClearanceSeparatedRegions = ({
 
     const sharedEdgesByNetIndex = new Map<number, number>()
     for (const cell of component) {
-      for (const neighbor of getGridNeighbors({ cell, nx, ny })) {
+      for (const neighbor of getGridNeighbors(cell, labeledLayer)) {
         const neighborNetIndex = labels[neighbor]!
         if (
           reachableCells[neighbor] !== 1 ||
           neighborNetIndex < 0 ||
           neighborNetIndex === netIndex ||
-          !canCrossGridEdgeForNet(
-            {
-              startCell: cell,
-              endCell: neighbor,
-              netIndex: neighborNetIndex,
-            },
+          !getCanCrossGridEdgeForNet(
+            neighborNetIndex,
             clearanceConnectivityContext,
-          )
+          )(cell, neighbor)
         ) {
           continue
         }
