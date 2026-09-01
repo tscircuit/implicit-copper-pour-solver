@@ -146,12 +146,17 @@ export const getClosestPointOnPrimitive = (
   })
 }
 
-export const doesSegmentCrossTrace = (
-  start: Point,
-  end: Point,
-  trace: Extract<CopperPrimitive, { kind: "segment" }>,
+export const doesSegmentCrossTrace = ({
+  start,
+  end,
+  trace,
   clearance = 0,
-): boolean => {
+}: {
+  start: Point
+  end: Point
+  trace: Extract<CopperPrimitive, { kind: "segment" }>
+  clearance?: number
+}): boolean => {
   const blockingRadius = trace.halfWidth + clearance
   const pathBounds = getBoundsFromPoints([start, end])!
   const expandedPathBounds = {
