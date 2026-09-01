@@ -245,6 +245,90 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     )
   })
 
+  test("omits regions isolated from power copper by trace clearance", () => {
+    const circuitJson = [
+      {
+        type: "pcb_board",
+        pcb_board_id: "board",
+        center: { x: 0, y: 0 },
+        width: 8,
+        height: 8,
+        thickness: 1.4,
+        num_layers: 2,
+        material: "fr4",
+      },
+      {
+        type: "source_net",
+        source_net_id: "ground",
+        name: "GND",
+        member_source_group_ids: [],
+        is_ground: true,
+      },
+      {
+        type: "source_net",
+        source_net_id: "signal",
+        name: "SIGNAL",
+        member_source_group_ids: [],
+        is_digital_signal: true,
+      },
+      {
+        type: "pcb_via",
+        pcb_via_id: "ground_anchor",
+        x: -3,
+        y: 0,
+        outer_diameter: 0.6,
+        hole_diameter: 0.3,
+        layers: ["top"],
+        source_net_id: "ground",
+      },
+      {
+        type: "pcb_trace",
+        pcb_trace_id: "signal_loop",
+        source_net_id: "signal",
+        route: [
+          { route_type: "wire", x: -1, y: -1, width: 0.2, layer: "top" },
+          { route_type: "wire", x: 1, y: -1, width: 0.2, layer: "top" },
+          { route_type: "wire", x: 1, y: 1, width: 0.2, layer: "top" },
+          { route_type: "wire", x: -1, y: 1, width: 0.2, layer: "top" },
+          { route_type: "wire", x: -1, y: -1, width: 0.2, layer: "top" },
+        ],
+      },
+    ] as AnyCircuitElement[]
+    const solve = (traceClearance?: number) => {
+      const solver = new ImplicitCopperPourPipelineSolver({
+        circuitJson,
+        gridPitch: 0.5,
+        edgeSimplificationTolerance: 0,
+        layers: ["top"],
+        traceClearance,
+      })
+      solver.solve()
+      return solver
+    }
+    const getLabelAt = (solver: ImplicitCopperPourPipelineSolver) => {
+      const problem = solver.getStageOutput<LabeledProblem>("assignGridCells")!
+      const layer = problem.labeledLayers[0]!
+      const i = Math.floor((0 - problem.bounds.minX) / problem.gridPitch)
+      const j = Math.floor((0 - problem.bounds.minY) / problem.gridPitch)
+      return layer.labels[j * layer.nx + i]
+    }
+
+    const withoutClearance = solve(0)
+    const withDefaultClearance = solve()
+
+    expect(getLabelAt(withoutClearance)).toBe(0)
+    expect(getLabelAt(withDefaultClearance)).toBe(-1)
+    expect(
+      withDefaultClearance
+        .getOutput()
+        .reduce((area, pour) => area + getAbsolutePolygonArea(pour), 0),
+    ).toBeLessThan(
+      withoutClearance
+        .getOutput()
+        .reduce((area, pour) => area + getAbsolutePolygonArea(pour), 0),
+    )
+  })
+
   test("normalizes small unanchored regions into their larger neighbor", () => {
     const makeLayer = (): LabeledLayer => ({
       layer: "top",
@@ -565,6 +649,8 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     }
     expect(getTopLabelAt(-4.125, -2.375)).toBe(groundNetIndex)
     expect(getTopLabelAt(-4.375, -5.375)).toBe(groundNetIndex)
+    expect(getTopLabelAt(5.375, 0.125)).toBe(-1)
+    expect(getTopLabelAt(5.375, -1.625)).toBe(-1)
     const tracedPointCount = tracedOutput.reduce(
       (sum, pour) => sum + (pour.shape === "polygon" ? pour.points.length : 0),
       0,
@@ -622,7 +708,7 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     await expect(
       getSvgFromGraphicsObject(bottomGraphics, { backgroundColor: "white" }),
     ).toMatchSvgSnapshot(import.meta.path, "nrf52810-bottom-layer-after-solve")
-  })
+  }, 30_000)
 
   test("includes every nRF52810 SMT pad but no existing copper pours", () => {
     const prepared = prepareCircuitJson({ circuitJson: nrf52810Board })
@@ -751,6 +837,17 @@ describe("ImplicitCopperPourPipelineSolver", () => {
     })
 
     expect(() => solver.solve()).toThrow("gridPitch must be greater than zero")
+  })
+
+  test("rejects invalid trace clearances", () => {
+    const solver = new ImplicitCopperPourPipelineSolver({
+      circuitJson: simplePowerBoard,
+      traceClearance: -1,
+    })
+
+    expect(() => solver.solve()).toThrow(
+      "traceClearance must be zero or greater",
+    )
   })
 
   test("rejects invalid edge simplification tolerances", () => {

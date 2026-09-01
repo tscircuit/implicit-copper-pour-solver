@@ -150,13 +150,15 @@ export const doesSegmentCrossTrace = (
   start: Point,
   end: Point,
   trace: Extract<CopperPrimitive, { kind: "segment" }>,
+  clearance = 0,
 ): boolean => {
+  const blockingRadius = trace.halfWidth + clearance
   const pathBounds = getBoundsFromPoints([start, end])!
   const expandedPathBounds = {
-    minX: pathBounds.minX - trace.halfWidth,
-    minY: pathBounds.minY - trace.halfWidth,
-    maxX: pathBounds.maxX + trace.halfWidth,
-    maxY: pathBounds.maxY + trace.halfWidth,
+    minX: pathBounds.minX - blockingRadius,
+    minY: pathBounds.minY - blockingRadius,
+    maxX: pathBounds.maxX + blockingRadius,
+    maxY: pathBounds.maxY + blockingRadius,
   }
   const traceStart = { x: trace.x1, y: trace.y1 }
   const traceEnd = { x: trace.x2, y: trace.y2 }
@@ -167,7 +169,7 @@ export const doesSegmentCrossTrace = (
 
   return (
     segmentToSegmentMinDistance(start, end, traceStart, traceEnd) <=
-    trace.halfWidth
+    blockingRadius
   )
 }
 

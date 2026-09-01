@@ -16,6 +16,281 @@ import type {
 } from "./types"
 
 const BLOCKED_CELL_LOCAL_REPAIR_RADIUS = 2
+// A connection survives downstream clipping only when part of the complete
+// shared cell edge remains outside the union of foreign trace clearances.
+const CELL_BOUNDARY_SAMPLE_COUNT = 9
+
+interface TraceClearanceBarrier {
+  netIndex: number
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  radiusSquared: number
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
+}
+
+const getSquaredDistanceToSegment = (
+  point: Point,
+  segment: TraceClearanceBarrier,
+): number => {
+  const dx = segment.x2 - segment.x1
+  const dy = segment.y2 - segment.y1
+  const lengthSquared = dx * dx + dy * dy
+  const t =
+    lengthSquared === 0
+      ? 0
+      : clamp(
+          ((point.x - segment.x1) * dx + (point.y - segment.y1) * dy) /
+            lengthSquared,
+          0,
+          1,
+        )
+  const closestX = segment.x1 + t * dx
+  const closestY = segment.y1 + t * dy
+  return (point.x - closestX) ** 2 + (point.y - closestY) ** 2
+}
+
+const getGridNeighbors = (cell: number, nx: number, ny: number): number[] => {
+  const i = cell % nx
+  const j = Math.floor(cell / nx)
+  const neighbors: number[] = []
+  if (i > 0) neighbors.push(cell - 1)
+  if (i < nx - 1) neighbors.push(cell + 1)
+  if (j > 0) neighbors.push(cell - nx)
+  if (j < ny - 1) neighbors.push(cell + nx)
+  return neighbors
+}
+
+const canCrossGridEdgeForNet = (
+  startCell: number,
+  endCell: number,
+  netIndex: number,
+  traceBarriers: TraceClearanceBarrier[],
+  gridCells: GridCellPositions[],
+  gridPitch: number,
+): boolean => {
+  const start = gridCells[startCell]!.center
+  const end = gridCells[endCell]!.center
+  const midpoint = {
+    x: (start.x + end.x) / 2,
+    y: (start.y + end.y) / 2,
+  }
+  const isHorizontalNeighbor = start.y === end.y
+  const boundary = isHorizontalNeighbor
+    ? {
+        minX: midpoint.x,
+        minY: midpoint.y - gridPitch / 2,
+        maxX: midpoint.x,
+        maxY: midpoint.y + gridPitch / 2,
+      }
+    : {
+        minX: midpoint.x - gridPitch / 2,
+        minY: midpoint.y,
+        maxX: midpoint.x + gridPitch / 2,
+        maxY: midpoint.y,
+      }
+  let blockedSamples = 0
+  const allSamplesBlocked = (1 << CELL_BOUNDARY_SAMPLE_COUNT) - 1
+
+  for (const trace of traceBarriers) {
+    if (
+      trace.netIndex === netIndex ||
+      trace.maxX < boundary.minX ||
+      trace.minX > boundary.maxX ||
+      trace.maxY < boundary.minY ||
+      trace.minY > boundary.maxY
+    ) {
+      continue
+    }
+
+    for (
+      let sampleIndex = 0;
+      sampleIndex < CELL_BOUNDARY_SAMPLE_COUNT;
+      sampleIndex++
+    ) {
+      const sampleBit = 1 << sampleIndex
+      if ((blockedSamples & sampleBit) !== 0) continue
+      const offset =
+        -gridPitch / 2 +
+        (gridPitch * sampleIndex) / (CELL_BOUNDARY_SAMPLE_COUNT - 1)
+      const point = isHorizontalNeighbor
+        ? { x: midpoint.x, y: midpoint.y + offset }
+        : { x: midpoint.x + offset, y: midpoint.y }
+      if (getSquaredDistanceToSegment(point, trace) <= trace.radiusSquared) {
+        blockedSamples |= sampleBit
+      }
+    }
+    if (blockedSamples === allSamplesBlocked) return false
+  }
+  return true
+}
+
+/**
+ * Reassign or omit labeled cell components that cannot reach copper belonging
+ * to their net once foreign traces are expanded by downstream clearance.
+ */
+const normalizeClearanceSeparatedRegions = (
+  labeledLayer: LabeledLayer,
+  insideCells: Uint8Array,
+  connectivitySeedNetIndices: Int32Array,
+  traceBarriers: Array<Extract<CopperPrimitive, { kind: "segment" }>>,
+  gridCells: GridCellPositions[],
+  traceClearance: number,
+  gridPitch: number,
+): void => {
+  if (traceClearance === 0) return
+
+  const { labels, nx, ny } = labeledLayer
+  const clearanceTraceBarriers: TraceClearanceBarrier[] = traceBarriers.map(
+    (trace) => {
+      const radius = trace.halfWidth + traceClearance
+      return {
+        netIndex: trace.netIndex,
+        x1: trace.x1,
+        y1: trace.y1,
+        x2: trace.x2,
+        y2: trace.y2,
+        radiusSquared: radius ** 2,
+        minX: Math.min(trace.x1, trace.x2) - radius,
+        minY: Math.min(trace.y1, trace.y2) - radius,
+        maxX: Math.max(trace.x1, trace.x2) + radius,
+        maxY: Math.max(trace.y1, trace.y2) + radius,
+      }
+    },
+  )
+  const crossingCacheByNetIndex = new Map<number, Uint8Array>()
+  const canCrossForNet = (
+    startCell: number,
+    endCell: number,
+    netIndex: number,
+  ): boolean => {
+    let cache = crossingCacheByNetIndex.get(netIndex)
+    if (!cache) {
+      cache = new Uint8Array(labels.length * 2)
+      crossingCacheByNetIndex.set(netIndex, cache)
+    }
+    const edgeIndex =
+      Math.min(startCell, endCell) * 2 +
+      (Math.abs(startCell - endCell) === nx ? 1 : 0)
+    const cached = cache[edgeIndex]
+    if (cached !== 0) return cached === 1
+
+    const canCross = canCrossGridEdgeForNet(
+      startCell,
+      endCell,
+      netIndex,
+      clearanceTraceBarriers,
+      gridCells,
+      gridPitch,
+    )
+    cache[edgeIndex] = canCross ? 1 : 2
+    return canCross
+  }
+  const reachableCells = new Uint8Array(labels.length)
+  const queue: number[] = []
+
+  for (let cell = 0; cell < labels.length; cell++) {
+    if (
+      insideCells[cell] !== 1 ||
+      connectivitySeedNetIndices[cell] !== labels[cell]
+    ) {
+      continue
+    }
+    reachableCells[cell] = 1
+    queue.push(cell)
+  }
+
+  let queueIndex = 0
+  while (queueIndex < queue.length) {
+    const cell = queue[queueIndex++]!
+    const netIndex = labels[cell]!
+    for (const neighbor of getGridNeighbors(cell, nx, ny)) {
+      if (
+        insideCells[neighbor] !== 1 ||
+        reachableCells[neighbor] === 1 ||
+        labels[neighbor] !== netIndex ||
+        !canCrossForNet(cell, neighbor, netIndex)
+      ) {
+        continue
+      }
+      reachableCells[neighbor] = 1
+      queue.push(neighbor)
+    }
+  }
+
+  const visitedCells = new Uint8Array(labels.length)
+  const relabels: Array<{ cells: number[]; netIndex: number }> = []
+
+  for (let start = 0; start < labels.length; start++) {
+    if (
+      insideCells[start] !== 1 ||
+      labels[start]! < 0 ||
+      reachableCells[start] === 1 ||
+      visitedCells[start] === 1
+    ) {
+      continue
+    }
+
+    const netIndex = labels[start]!
+    const component: number[] = []
+    const componentQueue = [start]
+    visitedCells[start] = 1
+
+    while (componentQueue.length > 0) {
+      const cell = componentQueue.pop()!
+      component.push(cell)
+      for (const neighbor of getGridNeighbors(cell, nx, ny)) {
+        if (
+          insideCells[neighbor] !== 1 ||
+          visitedCells[neighbor] === 1 ||
+          reachableCells[neighbor] === 1 ||
+          labels[neighbor] !== netIndex ||
+          !canCrossForNet(cell, neighbor, netIndex)
+        ) {
+          continue
+        }
+        visitedCells[neighbor] = 1
+        componentQueue.push(neighbor)
+      }
+    }
+
+    const sharedEdgesByNetIndex = new Map<number, number>()
+    for (const cell of component) {
+      for (const neighbor of getGridNeighbors(cell, nx, ny)) {
+        const neighborNetIndex = labels[neighbor]!
+        if (
+          reachableCells[neighbor] !== 1 ||
+          neighborNetIndex < 0 ||
+          neighborNetIndex === netIndex ||
+          !canCrossForNet(cell, neighbor, neighborNetIndex)
+        ) {
+          continue
+        }
+        sharedEdgesByNetIndex.set(
+          neighborNetIndex,
+          (sharedEdgesByNetIndex.get(neighborNetIndex) ?? 0) + 1,
+        )
+      }
+    }
+
+    const targetNetIndex = [...sharedEdgesByNetIndex.entries()].sort(
+      (a, b) => b[1] - a[1],
+    )[0]?.[0]
+    if (targetNetIndex !== undefined) {
+      relabels.push({ cells: component, netIndex: targetNetIndex })
+    } else {
+      relabels.push({ cells: component, netIndex: -1 })
+    }
+  }
+
+  for (const relabel of relabels) {
+    for (const cell of relabel.cells) labels[cell] = relabel.netIndex
+  }
+}
 
 const normalizeBlockedCellBoundaries = (
   labeledLayer: LabeledLayer,
@@ -23,6 +298,7 @@ const normalizeBlockedCellBoundaries = (
   visibleCells: Uint8Array,
   traceBarriers: Array<Extract<CopperPrimitive, { kind: "segment" }>>,
   gridCells: GridCellPositions[],
+  traceClearance: number,
 ): void => {
   const { labels, nx, ny } = labeledLayer
   const netIndices = new Set<number>()
@@ -70,7 +346,7 @@ const normalizeBlockedCellBoundaries = (
         const isBlocked = traceBarriers.some(
           (trace) =>
             trace.netIndex !== netIndex &&
-            doesSegmentCrossTrace(start, end, trace),
+            doesSegmentCrossTrace(start, end, trace, traceClearance),
         )
         if (isBlocked) continue
 
@@ -113,7 +389,13 @@ const normalizeBlockedCellBoundaries = (
 }
 
 export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
-  const { bounds, boardOutline, gridPitch, regionNormalizationArea } = problem
+  const {
+    bounds,
+    boardOutline,
+    gridPitch,
+    regionNormalizationArea,
+    traceClearance,
+  } = problem
   const nx = Math.max(1, Math.round((bounds.maxX - bounds.minX) / gridPitch))
   const ny = Math.max(1, Math.round((bounds.maxY - bounds.minY) / gridPitch))
   const normalizationMinCells = Math.max(
@@ -148,6 +430,10 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
     const anchoredCells = new Uint8Array(nx * ny)
     const insideCells = new Uint8Array(nx * ny)
     const visibleCells = new Uint8Array(nx * ny)
+    const connectivitySeedNetIndices = new Int32Array(nx * ny).fill(-1)
+    // Every power primitive is guaranteed a nearby seed even when the coarse
+    // grid has no sample centered directly on its copper.
+    const gridCellHalfDiagonal = (gridPitch * Math.SQRT2) / 2
 
     for (const { index: cell, center: point } of gridCells) {
       if (!isPointInsidePolygon(point, boardOutline)) continue
@@ -160,12 +446,14 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
         }))
         .sort((a, b) => a.distance - b.distance)
       let bestNetIndex = candidates[0]?.primitive.netIndex ?? -1
+      let bestDistance = candidates[0]?.distance ?? Number.POSITIVE_INFINITY
       let isAnchored = false
       let hasVisibleCandidate = false
 
       for (const candidate of candidates) {
         if (candidate.distance === 0) {
           bestNetIndex = candidate.primitive.netIndex
+          bestDistance = candidate.distance
           isAnchored = true
           hasVisibleCandidate = true
           break
@@ -177,10 +465,11 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
         const isBlocked = traceBarriers.some(
           (trace) =>
             trace.netIndex !== candidate.primitive.netIndex &&
-            doesSegmentCrossTrace(point, closestPoint, trace),
+            doesSegmentCrossTrace(point, closestPoint, trace, traceClearance),
         )
         if (!isBlocked) {
           bestNetIndex = candidate.primitive.netIndex
+          bestDistance = candidate.distance
           hasVisibleCandidate = true
           break
         }
@@ -188,6 +477,9 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
       labels[cell] = bestNetIndex
       if (isAnchored) anchoredCells[cell] = 1
       if (hasVisibleCandidate) visibleCells[cell] = 1
+      if (hasVisibleCandidate && bestDistance <= gridCellHalfDiagonal) {
+        connectivitySeedNetIndices[cell] = bestNetIndex
+      }
     }
     const labeledLayer = { layer, labels, nx, ny }
     normalizeBlockedCellBoundaries(
@@ -196,6 +488,16 @@ export const assignGridCells = (problem: PreparedProblem): LabeledProblem => {
       visibleCells,
       traceBarriers,
       gridCells,
+      traceClearance,
+    )
+    normalizeClearanceSeparatedRegions(
+      labeledLayer,
+      insideCells,
+      connectivitySeedNetIndices,
+      traceBarriers,
+      gridCells,
+      traceClearance,
+      gridPitch,
     )
     normalizeLabeledLayerRegions(
       labeledLayer,

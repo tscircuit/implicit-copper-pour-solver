@@ -11,6 +11,11 @@ export interface ImplicitCopperPourSolverInput {
   /** Grid spacing in millimetres. Matches the artifact's 0.25 mm default. */
   gridPitch?: number
   /**
+   * Clearance in millimetres reserved around foreign traces when assigning
+   * power-net regions. Matches the downstream copper-pour solver's default.
+   */
+  traceClearance?: number
+  /**
    * Maximum edge deviation in millimetres when smoothing traced grid polygons.
    * Defaults to gridPitch. Set to zero to disable edge simplification.
    */
@@ -90,6 +95,7 @@ export interface PreparedProblem {
   nets: PreparedNet[]
   primitives: CopperPrimitive[]
   gridPitch: number
+  traceClearance: number
   minRegionArea: number
   regionNormalizationArea: number
   coveredWithSolderMask: boolean
