@@ -1,5 +1,12 @@
 import type { LayerRef, PcbCopperPour, Point } from "circuit-json"
-import { clamp, grid, type GridCellPositions } from "@tscircuit/math-utils"
+import {
+  clamp,
+  getBoundsFromPoints,
+  grid,
+  type GridCellPositions,
+  midpoint,
+  pointToSegmentDistance,
+} from "@tscircuit/math-utils"
 import { applyToPoint, compose, scale, translate } from "transformation-matrix"
 import {
   distanceToPrimitive,
@@ -22,36 +29,13 @@ const CELL_BOUNDARY_SAMPLE_COUNT = 9
 
 interface TraceClearanceBarrier {
   netIndex: number
-  x1: number
-  y1: number
-  x2: number
-  y2: number
-  radiusSquared: number
+  start: Point
+  end: Point
+  radius: number
   minX: number
   minY: number
   maxX: number
   maxY: number
-}
-
-const getSquaredDistanceToSegment = (
-  point: Point,
-  segment: TraceClearanceBarrier,
-): number => {
-  const dx = segment.x2 - segment.x1
-  const dy = segment.y2 - segment.y1
-  const lengthSquared = dx * dx + dy * dy
-  const t =
-    lengthSquared === 0
-      ? 0
-      : clamp(
-          ((point.x - segment.x1) * dx + (point.y - segment.y1) * dy) /
-            lengthSquared,
-          0,
-          1,
-        )
-  const closestX = segment.x1 + t * dx
-  const closestY = segment.y1 + t * dy
-  return (point.x - closestX) ** 2 + (point.y - closestY) ** 2
 }
 
 const getGridNeighbors = (cell: number, nx: number, ny: number): number[] => {
@@ -75,23 +59,20 @@ const canCrossGridEdgeForNet = (
 ): boolean => {
   const start = gridCells[startCell]!.center
   const end = gridCells[endCell]!.center
-  const midpoint = {
-    x: (start.x + end.x) / 2,
-    y: (start.y + end.y) / 2,
-  }
+  const boundaryMidpoint = midpoint(start, end)
   const isHorizontalNeighbor = start.y === end.y
   const boundary = isHorizontalNeighbor
     ? {
-        minX: midpoint.x,
-        minY: midpoint.y - gridPitch / 2,
-        maxX: midpoint.x,
-        maxY: midpoint.y + gridPitch / 2,
+        minX: boundaryMidpoint.x,
+        minY: boundaryMidpoint.y - gridPitch / 2,
+        maxX: boundaryMidpoint.x,
+        maxY: boundaryMidpoint.y + gridPitch / 2,
       }
     : {
-        minX: midpoint.x - gridPitch / 2,
-        minY: midpoint.y,
-        maxX: midpoint.x + gridPitch / 2,
-        maxY: midpoint.y,
+        minX: boundaryMidpoint.x - gridPitch / 2,
+        minY: boundaryMidpoint.y,
+        maxX: boundaryMidpoint.x + gridPitch / 2,
+        maxY: boundaryMidpoint.y,
       }
   let blockedSamples = 0
   const allSamplesBlocked = (1 << CELL_BOUNDARY_SAMPLE_COUNT) - 1
@@ -118,9 +99,11 @@ const canCrossGridEdgeForNet = (
         -gridPitch / 2 +
         (gridPitch * sampleIndex) / (CELL_BOUNDARY_SAMPLE_COUNT - 1)
       const point = isHorizontalNeighbor
-        ? { x: midpoint.x, y: midpoint.y + offset }
-        : { x: midpoint.x + offset, y: midpoint.y }
-      if (getSquaredDistanceToSegment(point, trace) <= trace.radiusSquared) {
+        ? { x: boundaryMidpoint.x, y: boundaryMidpoint.y + offset }
+        : { x: boundaryMidpoint.x + offset, y: boundaryMidpoint.y }
+      if (
+        pointToSegmentDistance(point, trace.start, trace.end) <= trace.radius
+      ) {
         blockedSamples |= sampleBit
       }
     }
@@ -148,17 +131,18 @@ const normalizeClearanceSeparatedRegions = (
   const clearanceTraceBarriers: TraceClearanceBarrier[] = traceBarriers.map(
     (trace) => {
       const radius = trace.halfWidth + traceClearance
+      const start = { x: trace.x1, y: trace.y1 }
+      const end = { x: trace.x2, y: trace.y2 }
+      const centerlineBounds = getBoundsFromPoints([start, end])!
       return {
         netIndex: trace.netIndex,
-        x1: trace.x1,
-        y1: trace.y1,
-        x2: trace.x2,
-        y2: trace.y2,
-        radiusSquared: radius ** 2,
-        minX: Math.min(trace.x1, trace.x2) - radius,
-        minY: Math.min(trace.y1, trace.y2) - radius,
-        maxX: Math.max(trace.x1, trace.x2) + radius,
-        maxY: Math.max(trace.y1, trace.y2) + radius,
+        start,
+        end,
+        radius,
+        minX: centerlineBounds.minX - radius,
+        minY: centerlineBounds.minY - radius,
+        maxX: centerlineBounds.maxX + radius,
+        maxY: centerlineBounds.maxY + radius,
       }
     },
   )
