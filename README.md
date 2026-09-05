@@ -10,17 +10,21 @@ The solver follows the power-trace-expansion algorithm from the supplied
 1. Sample a regular grid on each selected copper layer.
 2. Sort power-net-owned pads, traces, and vias by distance from each sample.
 3. Prefer the nearest candidate whose decision ray does not cross a trace from
-   another net.
+   another net, including the configured downstream trace clearance.
 4. When every candidate is blocked, locally normalize narrow fallback bulges
    toward the clearly closer reachable power territory. Cells sampled directly
    on a trace retain their nearest-net fallback because downstream clearance
    removes that copper.
-5. Merge small unanchored connected regions into their dominant larger
+5. Check connectivity across cell boundaries after expanding foreign traces by
+   their clearance. Reassign clearance-separated regions to an adjacent,
+   reachable power net when possible and omit regions that would otherwise
+   become isolated copper islands.
+6. Merge small unanchored connected regions into their dominant larger
    neighbor, then group four-connected cells with the same net.
-6. Optionally discard regions below an explicitly configured minimum area.
-7. Trace each surviving grid region into one or more non-overlapping polygons.
-8. Simplify the traced edges to smooth grid-generated stair steps.
-9. Emit coarse region polygons for `source_net` elements with `is_power`,
+7. Optionally discard regions below an explicitly configured minimum area.
+8. Trace each surviving grid region into one or more non-overlapping polygons.
+9. Simplify the traced edges to smooth grid-generated stair steps.
+10. Emit coarse region polygons for `source_net` elements with `is_power`,
    `is_ground`, or `is_positive_voltage_source` set. Except for the board
    outline, exact copper exclusions are deferred to the downstream solver.
 
@@ -32,6 +36,7 @@ import { ImplicitCopperPourPipelineSolver } from "@tscircuit/implicit-copper-pou
 const solver = new ImplicitCopperPourPipelineSolver({
   circuitJson,
   gridPitch: 0.25,
+  traceClearance: 0.2,
   edgeSimplificationTolerance: 0.25,
   layers: ["top", "bottom"],
 })
@@ -48,9 +53,10 @@ tolerance defaults to `gridPitch`; set `edgeSimplificationTolerance` to `0` to
 keep the traced grid edges unchanged. Shared boundaries are simplified as a
 single topological arc and reused by both regions, preventing smoothing from
 creating overlaps or gaps between adjacent pours.
-`minRegionArea` defaults to zero so eligible power nets partition the complete
-board area. Setting it above zero deliberately allows small regions to be
-omitted.
+`traceClearance` defaults to 0.2 mm to match the downstream copper-pour solver;
+set it to `0` to disable clearance-aware island removal. `minRegionArea`
+defaults to zero. Setting it above zero deliberately allows additional small
+regions to be omitted.
 
 ## Development
 

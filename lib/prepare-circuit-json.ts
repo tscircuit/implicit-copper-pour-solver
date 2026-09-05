@@ -33,6 +33,7 @@ import type {
 } from "./types"
 
 const DEFAULT_GRID_PITCH = 0.25
+const DEFAULT_TRACE_CLEARANCE = 0.2
 const DEFAULT_MIN_REGION_AREA = 0
 const DEFAULT_REGION_NORMALIZATION_AREA = 0.5
 
@@ -233,12 +234,16 @@ export const prepareCircuitJson = (
   input: ImplicitCopperPourSolverInput,
 ): PreparedProblem => {
   const gridPitch = input.gridPitch ?? DEFAULT_GRID_PITCH
+  const traceClearance = input.traceClearance ?? DEFAULT_TRACE_CLEARANCE
   const edgeSimplificationTolerance =
     input.edgeSimplificationTolerance ?? gridPitch
   const minRegionArea = input.minRegionArea ?? DEFAULT_MIN_REGION_AREA
   const regionNormalizationArea =
     input.regionNormalizationArea ?? DEFAULT_REGION_NORMALIZATION_AREA
   if (!(gridPitch > 0)) throw new Error("gridPitch must be greater than zero")
+  if (!Number.isFinite(traceClearance) || traceClearance < 0) {
+    throw new Error("traceClearance must be zero or greater")
+  }
   if (
     !Number.isFinite(edgeSimplificationTolerance) ||
     edgeSimplificationTolerance < 0
@@ -514,6 +519,7 @@ export const prepareCircuitJson = (
     nets,
     primitives,
     gridPitch,
+    traceClearance,
     minRegionArea,
     regionNormalizationArea,
     coveredWithSolderMask: input.coveredWithSolderMask ?? true,
