@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { getSvgFromGraphicsObject } from "graphics-debug"
 import { ImplicitCopperPourPipelineSolver } from "../lib"
+import { filterGraphicsByLayer } from "./fixtures/filter-graphics-by-layer"
 import { nrf52810Board } from "./fixtures/nrf52810-board"
 import {
   nrf52810BottomBulkBoard,
@@ -56,11 +57,24 @@ for (const [name, circuitJson, addedComponents] of examples) {
         ),
       ).toEqual(new Set(["source_net_0", "source_net_1"]))
     }
+    const graphics = solver.visualize()
     await expect(
-      getSvgFromGraphicsObject(solver.visualize(), {
+      getSvgFromGraphicsObject(graphics, {
         backgroundColor: "white",
       }),
     ).toMatchSvgSnapshot(import.meta.path, name)
+    for (const [layer, index] of [
+      ["top", 0],
+      ["bottom", 1],
+    ] as const) {
+      const layerGraphics = filterGraphicsByLayer(graphics, index)
+      expect(layerGraphics.polygons).toHaveLength(
+        output.filter((pour) => pour.layer === layer).length,
+      )
+      await expect(
+        getSvgFromGraphicsObject(layerGraphics, { backgroundColor: "white" }),
+      ).toMatchSvgSnapshot(import.meta.path, `${name}-${layer}`)
+    }
   })
 }
 

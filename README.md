@@ -100,4 +100,5 @@ ports, graphics and attached trace endpoints with them. Added capacitors connect
 to VBAT and GND with explicit source traces, pad-to-via stubs and through vias.
 These are copper-region solver examples; the moved traces are stretched rather
 than autorouted, and the layouts have not been validated for fabrication.
-Each variant has a solved-board SVG snapshot in `tests/__snapshots__`.
+Each variant has three solved-board SVG snapshots in `tests/__snapshots__`:
+both layers together, top only, and bottom only.
