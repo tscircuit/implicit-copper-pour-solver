@@ -4,7 +4,9 @@
   "description": "Generate implicit power-net copper pour polygons from Circuit JSON",
   "type": "module",
   "module": "lib/index.ts",
-  "files": ["lib"],
+  "files": [
+    "lib"
+  ],
   "scripts": {
     "test": "bun test",
     "test:update-snapshots": "BUN_UPDATE_SNAPSHOTS=1 bun test",
@@ -12,7 +14,8 @@
     "format": "biome format . --write",
     "format:check": "biome format .",
     "start": "cosmos",
-    "build:site": "cosmos-export"
+    "build:site": "cosmos-export",
+    "generate:examples": "bun scripts/generate-examples.tsx"
   },
   "repository": {
     "type": "git",
@@ -22,18 +25,30 @@
   "devDependencies": {
     "@biomejs/biome": "^2.2.4",
     "@tscircuit/circuit-json-util": "^0.0.111",
+    "@tscircuit/copper-pour-solver": "^0.0.54",
+    "@tscircuit/core": "0.0.1878",
+    "@tscircuit/infer-cable-insertion-point": "^0.0.4",
+    "@tscircuit/miniflex": "^0.0.4",
+    "@tscircuit/props": "^0.0.646",
+    "@tscircuit/schematic-trace-solver": "^0.0.192",
     "@tscircuit/solver-utils": "^0.0.21",
+    "@tscircuit/soup-util": "^0.0.41",
     "@types/bun": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "bun-match-svg": "^0.0.14",
-    "circuit-json": "^0.0.472",
+    "calculate-elbow": "^0.0.13",
+    "circuit-json": "0.0.484",
     "circuit-json-to-connectivity-map": "^0.0.29",
+    "connectivity-map": "^1.0.0",
+    "flatbush": "^4.6.2",
     "graphics-debug": "^0.0.100",
+    "minicssgrid": "^0.0.9",
     "react": "^19.1.1",
     "react-cosmos": "^7.4.0",
     "react-cosmos-plugin-vite": "^7.4.0",
     "react-dom": "^19.1.1",
+    "spicey": "^0.0.14",
     "typescript": "^5.9.2",
     "vite": "^7.1.5"
   },

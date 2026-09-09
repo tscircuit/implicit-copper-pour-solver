@@ -81,24 +81,36 @@ Update approved snapshots with:
 bun run test:update-snapshots
 ```
 
-### nRF52810 example layouts
+### TSX example circuits
 
-Run `bun run start` and select one of these pages in Cosmos:
+Run `bun run start` and select one of these Cosmos pages. The original nRF52810
+tracker remains available as `solver`.
 
-| Page | Change from the original tracker |
-| --- | --- |
-| `solver` | Original nRF52810 board |
-| `nrf52810-left-led` | LED1 and its three resistors shifted 3 mm left |
-| `nrf52810-lower-debug` | Five debug test pads shifted 3 mm toward the lower edge |
-| `nrf52810-top-decoupling` | Three extra 100 nF capacitors along the left side on top |
-| `nrf52810-bottom-bulk` | 10 µF, 1 µF and 100 nF capacitors along the lower edge on bottom |
+| Page / TSX source in `examples/` | Board | Layout and components |
+| --- | --- | --- |
+| `compact-beacon` | 28 × 28 mm | Centered MCU, status LED, reset pull-up/test pad, power and SWD headers |
+| `led-controller` | 48 × 24 mm | MCU at the left rotated 90°, six LED/resistor channels spread across the right |
+| `sensor-breakout` | 30 × 46 mm | MCU at the bottom rotated 180°, two I²C headers at the top, pull-ups and local decoupling |
+| `analog-input` | 44 × 34 mm | MCU at the right rotated 270°, four input headers and RC filters at the left, bottom-side filter capacitors |
 
-The variants are defined in `tests/fixtures/nrf52810-variants.ts`. They clone the
-original Circuit JSON, retain its source connectivity and PCB geometry, and
-remove existing pours and stale diagnostics. Moved parts carry their pads,
-ports, graphics and attached trace endpoints with them. Added capacitors connect
-to VBAT and GND with explicit source traces, pad-to-via stubs and through vias.
-These are copper-region solver examples; the moved traces are stretched rather
-than autorouted, and the layouts have not been validated for fabrication.
-Each variant has three solved-board SVG snapshots in `tests/__snapshots__`:
-both layers together, top only, and bottom only.
+The examples share the original tracker's nRF52810 footprint and a small supply
+and decoupling circuit. They are simplified solver exercises, not complete BLE
+reference designs: RF matching and external clocks are omitted.
+
+Regenerate their committed Circuit JSON directly from TSX using `@tscircuit/core`
+and its local autorouter:
+
+```sh
+bun run generate:examples
+# Or regenerate one circuit:
+bun run generate:examples analog-input
+bun run test:update-snapshots
+```
+
+The generator disables automatic copper pours so these fixtures exercise this
+repository's solver. It writes the renderer's Circuit JSON without moving pads
+or editing routes afterward, and rejects builds with PCB errors. Dependencies
+required by core's published runtime are listed explicitly in `devDependencies`.
+The debugger and tests consume the committed JSON, so normal tests do not rerun
+the autorouter. Each example has combined, top-only, and bottom-only solved SVG
+snapshots in `tests/__snapshots__`.
