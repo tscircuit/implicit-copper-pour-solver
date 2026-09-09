@@ -80,3 +80,24 @@ Update approved snapshots with:
 ```sh
 bun run test:update-snapshots
 ```
+
+### nRF52810 example layouts
+
+Run `bun run start` and select one of these pages in Cosmos:
+
+| Page | Change from the original tracker |
+| --- | --- |
+| `solver` | Original nRF52810 board |
+| `nrf52810-left-led` | LED1 and its three resistors shifted 3 mm left |
+| `nrf52810-lower-debug` | Five debug test pads shifted 3 mm toward the lower edge |
+| `nrf52810-top-decoupling` | Three extra 100 nF capacitors along the left side on top |
+| `nrf52810-bottom-bulk` | 10 µF, 1 µF and 100 nF capacitors along the lower edge on bottom |
+
+The variants are defined in `tests/fixtures/nrf52810-variants.ts`. They clone the
+original Circuit JSON, retain its source connectivity and PCB geometry, and
+remove existing pours and stale diagnostics. Moved parts carry their pads,
+ports, graphics and attached trace endpoints with them. Added capacitors connect
+to VBAT and GND with explicit source traces, pad-to-via stubs and through vias.
+These are copper-region solver examples; the moved traces are stretched rather
+than autorouted, and the layouts have not been validated for fabrication.
+Each variant has a solved-board SVG snapshot in `tests/__snapshots__`.
