@@ -1,3 +1,8 @@
+import { getElementId } from "@tscircuit/circuit-json-util"
+import {
+  getBoundFromCenteredRect,
+  getBoundsFromPoints,
+} from "@tscircuit/math-utils"
 import type {
   AnyCircuitElement,
   LayerRef,
@@ -9,11 +14,6 @@ import type {
   Point,
   SourceNet,
 } from "circuit-json"
-import { getElementId } from "@tscircuit/circuit-json-util"
-import {
-  getBoundFromCenteredRect,
-  getBoundsFromPoints,
-} from "@tscircuit/math-utils"
 import {
   ConnectivityMap,
   findConnectedNetworks,
@@ -163,11 +163,21 @@ const addPlatedHole = (
       rotation: hole.ccw_rotation,
     })
   } else if (hole.shape === "hole_with_polygon_pad") {
+    const padToWorld = compose(
+      translate(Number(hole.x), Number(hole.y)),
+      rotateDEG(Number(hole.ccw_rotation) || 0),
+    )
     primitives.push({
       kind: "polygon",
       layers,
       netIndex,
-      points: hole.pad_outline,
+      points: applyToPoints(
+        padToWorld,
+        hole.pad_outline.map((point) => ({
+          x: Number(point.x),
+          y: Number(point.y),
+        })),
+      ),
     })
   } else if ("rect_pad_width" in hole && "rect_pad_height" in hole) {
     const rotation =
